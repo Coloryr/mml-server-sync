@@ -1,0 +1,29 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.coloryr'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // 用当前 JDK 编译 Java 8 字节码；JDK 8 本身不支持 --release
+    if (JavaVersion.current().isJava9Compatible()) {
+        options.release = 8
+    }
+}
+
+tasks.named('jar') {
+    archiveFileName = 'mml-server-sync.jar'
+    manifest {
+        attributes(
+            'Main-Class': 'com.coloryr.mml.serversync.Main',
+            'Premain-Class': 'com.coloryr.mml.serversync.Agent'
+        )
+    }
+}
