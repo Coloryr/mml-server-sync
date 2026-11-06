@@ -86,7 +86,8 @@ final class OptionalModsDialog {
      * 弹出勾选窗并等待玩家确认；必须在事件线程上调用
      *
      * 调用方自己决定时机：按钮点击直接调，自动弹窗交给后台线程包装。方法阻塞到
-     * 窗口关闭为止，返回当前勾选的路径集合——没有取消出口，关窗就是确认。
+     * 窗口关闭为止，返回**所有展示行**的最终勾选状态——没有取消出口，关窗就是确认。
+     * 调用方只应把结果并进展示过的行，未展示行的选择保持原状。
      *
      * - `parent`: 父窗口，可为 null
      * - `rows`: 要列出的条目
@@ -94,30 +95,30 @@ final class OptionalModsDialog {
      *
      * # 返回值
      *
-     * 勾选的路径集合
+     * 路径 → 是否勾选，覆盖全部展示行
      */
-    static Set<String> askForSelection(Component parent, List<Row> rows, String header) {
+    static java.util.LinkedHashMap<String, Boolean> askForSelection(Component parent,
+                                                                    List<Row> rows, String header) {
         if (SwingUtilities.isEventDispatchThread()) {
             return show(parent, rows, header);
         }
-        final Set<String>[] result = new Set[1];
+        final java.util.LinkedHashMap<String, Boolean>[] result = new java.util.LinkedHashMap[1];
         try {
             SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows, header));
         } catch (Exception e) {
             // 弹不出来别拦住同步：按打开时的勾选处理
             Log.error(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG) + e.getMessage());
-            Set<String> fallback = new LinkedHashSet<>();
+            java.util.LinkedHashMap<String, Boolean> fallback = new java.util.LinkedHashMap<>();
             for (Row row : rows) {
-                if (row.checked) {
-                    fallback.add(row.path);
-                }
+                fallback.put(row.path, row.checked);
             }
             return fallback;
         }
         return result[0];
     }
 
-    private static Set<String> show(Component parent, List<Row> rows, String header) {
+    private static java.util.LinkedHashMap<String, Boolean> show(Component parent, List<Row> rows,
+                                                                 String header) {
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MODS_BUTTON), true);
         dialog.setMinimumSize(new Dimension(720, 380));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -206,13 +207,14 @@ final class OptionalModsDialog {
             }
             count.setText(Text.of(Msg.SELECTED_COUNT, checked, model.getRowCount()));
             ok.setText(Text.of(Msg.CONFIRM_SELECTION, checked));
-            all.setSelected(checked == model.getRowCount());
         };
         model.addTableModelListener(event -> refresh.run());
+        // 「全选」始终是勾选全部：按切换语义点一下会把全部清空，与直觉相反
         all.addActionListener(event -> {
             for (int i = 0; i < model.getRowCount(); i++) {
-                model.setValueAt(all.isSelected(), i, 0);
+                model.setValueAt(Boolean.TRUE, i, 0);
             }
+            all.setSelected(true);
             refresh.run();
         });
 
@@ -258,13 +260,11 @@ final class OptionalModsDialog {
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
 
-        Set<String> checked = new LinkedHashSet<>();
+        java.util.LinkedHashMap<String, Boolean> out = new java.util.LinkedHashMap<>();
         for (int i = 0; i < rows.size(); i++) {
-            if (Boolean.TRUE.equals(model.getValueAt(i, 0))) {
-                checked.add(rows.get(i).path);
-            }
+            out.put(rows.get(i).path, Boolean.TRUE.equals(model.getValueAt(i, 0)));
         }
-        return checked;
+        return out;
     }
 
     private static void toggle(DefaultTableModel model, int row) {
@@ -291,13 +291,17 @@ final class OptionalModsDialog {
         return row % 2 == 0 ? table.getBackground() : STRIPE;
     }
 
-    /** 勾选列的复选框渲染：居中、跟着隔行底色 */
+    /** 勾选列的复选框渲染：居中、无内边距（默认 margin 会左右不对称）、跟着隔行底色 */
     private static final class CheckRenderer extends DefaultTableCellRenderer {
         private static final long serialVersionUID = 1L;
         private final JCheckBox box = new JCheckBox();
 
         CheckRenderer() {
             box.setHorizontalAlignment(SwingConstants.CENTER);
+            box.setMargin(new java.awt.Insets(0, 0, 0, 0));
+            box.setBorderPainted(false);
+            box.setFocusPainted(false);
+            box.setIconTextGap(0);
             box.setOpaque(true);
         }
 

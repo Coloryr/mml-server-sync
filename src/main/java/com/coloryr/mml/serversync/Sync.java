@@ -46,8 +46,8 @@ final class Sync {
     private Map<String, String> optionalNotes = Collections.emptyMap();
     /** 打开中的自选模组弹窗；玩家确认后清空 */
     private final AtomicReference<PendingChoice> pendingDialog = new AtomicReference<>();
-    /** 本轮最近一次确认过的勾选结果；null 表示还没有玩家确认过 */
-    private volatile Set<String> lastChoice;
+    /** 本轮最近一次确认过的勾选结果（覆盖弹窗展示过的行）；null 表示还没有玩家确认过 */
+    private volatile Map<String, Boolean> lastChoice;
 
     Sync(Options options, Progress ui) {
         this.options = options;
@@ -59,10 +59,10 @@ final class Sync {
     /** 打开中的自选模组弹窗：玩家确认后 latch 归零、结果就位 */
     private static final class PendingChoice {
         final CountDownLatch done = new CountDownLatch(1);
-        final AtomicReference<Set<String>> result = new AtomicReference<>();
+        final AtomicReference<Map<String, Boolean>> result = new AtomicReference<>();
 
-        /** 等玩家确认；返回勾选的路径集合 */
-        Set<String> await() throws InterruptedException {
+        /** 等玩家确认；返回全部展示行的勾选状态 */
+        Map<String, Boolean> await() throws InterruptedException {
             done.await();
             return result.get();
         }
@@ -106,19 +106,7 @@ final class Sync {
         ui.title((current.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : current.name)
                 + " · " + packVersionOf(current));
 
-        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
-        // 按钮接线依赖具体窗口类：从 update/ 包运行时类加载器分裂，
-        // instanceof 不成立，按钮在过渡期保持置灰，弹窗本身不受影响。
-        if (hasButtonUi()) {
-            ((ProgressWindow) ui).setOptionalHandler(this::openManageDialog);
-            ((ProgressWindow) ui).enableOptionalModsButton();
-        }
-        if (canAsk()) {
-            optionalNotes = fetchOptionalNotes(manifestUrl);
-        }
-
-        // 自选模组勾选：上次的记录优先；没有记录的条目按交互能力给默认
-        // （可交互 = 默认勾选，无人值守 = 禁用安装）；--skip 指定的强制不勾选
+        // 自选模组状态先于按钮接线加载：任何时刻点开的弹窗都有完整数据
         OptionalState.Loaded state = OptionalState.load(options.stateDir);
         optionalState = state;
         List<Manifest.FileEntry> changedOptionals = new ArrayList<>();
@@ -139,6 +127,17 @@ final class Sync {
             if (!state.hashOf(item.path).equalsIgnoreCase(contentHash(item))) {
                 changedOptionals.add(item);
             }
+        }
+
+        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
+        // 按钮接线依赖具体窗口类：从 update/ 包运行时类加载器分裂，
+        // instanceof 不成立，按钮在过渡期保持置灰，弹窗本身不受影响。
+        if (canAsk()) {
+            optionalNotes = fetchOptionalNotes(manifestUrl);
+        }
+        if (hasButtonUi()) {
+            ((ProgressWindow) ui).setOptionalHandler(this::openManageDialog);
+            ((ProgressWindow) ui).enableOptionalModsButton();
         }
 
         Manifest old = loadOld(current);
@@ -274,7 +273,7 @@ final class Sync {
         if (pending != null) {
             ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
             try {
-                Set<String> chosen = pending.await();
+                Map<String, Boolean> chosen = pending.await();
                 if (chosen != null) {
                     lastChoice = chosen;
                 }
@@ -285,11 +284,10 @@ final class Sync {
         }
         checkCancelled();
         ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
+        // 只并入弹窗展示过的行：部分行弹窗（如仅新增条目）确认时，未展示行的选择保持原状
         if (lastChoice != null) {
-            for (Manifest.FileEntry item : current.files) {
-                if (item.optional) {
-                    selections.put(item.path, lastChoice.contains(item.path));
-                }
+            for (Map.Entry<String, Boolean> entry : lastChoice.entrySet()) {
+                selections.put(entry.getKey(), entry.getValue());
             }
         }
         reconcileOptionalFiles(current);
@@ -363,7 +361,7 @@ final class Sync {
         javax.swing.JFrame parent = ownerFrame();
         javax.swing.SwingUtilities.invokeLater(() -> {
             try {
-                Set<String> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
+                Map<String, Boolean> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
                 pending.result.set(chosen);
                 lastChoice = chosen;
             } finally {
