@@ -42,8 +42,11 @@ final class ProgressWindow implements Progress {
     private final JLabel detailLabel;
     private final JProgressBar bar;
     private final JButton cancelButton;
+    private final JButton optionalButton;
     /** 已经点过取消，别重复问 */
     private boolean cancelRequested;
+    /** 用户点了「自选模组」，等同步线程到安全点处理 */
+    private volatile boolean optionalRequested;
     /** 结束之后不再更新界面 */
     private final AtomicBoolean finished = new AtomicBoolean();
     /** 结束后窗口停留的时间，单位毫秒；0 表示立刻关掉 */
@@ -85,8 +88,13 @@ final class ProgressWindow implements Progress {
 
         cancelButton = new JButton(Text.of(Msg.CANCEL_UPDATE));
         cancelButton.addActionListener(event -> requestCancel());
+        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先隐藏
+        optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
+        optionalButton.setVisible(false);
+        optionalButton.addActionListener(event -> requestOptionalManage());
         JPanel south = new JPanel(new BorderLayout());
         south.add(detailLabel, BorderLayout.WEST);
+        south.add(optionalButton, BorderLayout.CENTER);
         south.add(cancelButton, BorderLayout.EAST);
 
         JPanel root = new JPanel(new BorderLayout(0, 8));
@@ -152,6 +160,49 @@ final class ProgressWindow implements Progress {
         dispose();
     }
 
+    /** 显示「自选模组」按钮，等用户点 */
+    void showOptionalModsButton() {
+        update(() -> optionalButton.setVisible(true));
+    }
+
+    /** 收起「自选模组」按钮：下载计划定稿后不再接受改动 */
+    void hideOptionalModsButton() {
+        optionalRequested = false;
+        update(() -> {
+            optionalButton.setVisible(false);
+            optionalButton.setEnabled(true);
+        });
+    }
+
+    /** 处理完一次管理请求后恢复按钮，用户还可以在下载开始前再改一次 */
+    void rearmOptionalModsButton() {
+        update(() -> optionalButton.setEnabled(true));
+    }
+
+    /**
+     * 用户是否点了「自选模组」；取走即清零，按钮保持置灰到处理完
+     *
+     * # 返回值
+     *
+     * 有未处理的请求时返回 true
+     */
+    boolean consumeOptionalRequest() {
+        if (!optionalRequested) {
+            return false;
+        }
+        optionalRequested = false;
+        return true;
+    }
+
+    /** 用户点了「自选模组」：记下请求，由同步线程在安全点弹窗 */
+    private void requestOptionalManage() {
+        if (finished.get() || optionalRequested) {
+            return;
+        }
+        optionalRequested = true;
+        optionalButton.setEnabled(false);
+    }
+
     @Override
     public void title(String text) {
         update(() -> titleLabel.setText(text == null || text.isEmpty() ? Text.of(Msg.SYNCING_SERVER_INSTANCE) : text));
@@ -198,6 +249,7 @@ final class ProgressWindow implements Progress {
                 return;
             }
             cancelButton.setEnabled(false);
+            optionalButton.setEnabled(false);
             bar.setIndeterminate(false);
             bar.setValue(bar.getMaximum());
             bar.setString(ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
@@ -234,6 +286,7 @@ final class ProgressWindow implements Progress {
         }
         cancelRequested = true;
         cancelButton.setEnabled(false);
+        optionalButton.setEnabled(false);
         stageLabel.setText(Text.of(Msg.CANCELLING));
         System.setProperty(CANCEL_KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
         // 主线程可能还阻塞在网络读取上，轮询到取消状态要等下一 MB 边界：

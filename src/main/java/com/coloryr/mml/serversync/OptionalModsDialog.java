@@ -49,6 +49,8 @@ final class OptionalModsDialog {
     private static final Color ADDED = new Color(0x2E, 0x7D, 0x32);
     /** 状态列：已禁用 */
     private static final Color DISABLED = new Color(0x8A, 0x8A, 0x8A);
+    /** 状态列：需更新 */
+    private static final Color NEEDS_UPDATE = new Color(0xB2, 0x6A, 0x00);
     /** 普通文字颜色 */
     private static final Color TEXT = new Color(0x1F, 0x23, 0x28);
 
@@ -66,13 +68,24 @@ final class OptionalModsDialog {
         final boolean enabled;
         /** 本地旧文件名，与 name 不同才有值 */
         final String oldName;
+        /** 状态文字；为空时按启用 / 禁用 / 新增自动拼 */
+        final String status;
+        /** 初始是否勾选 */
+        final boolean checked;
 
         Row(String path, String name, boolean added, boolean enabled, String oldName) {
+            this(path, name, added, enabled, oldName, "", true);
+        }
+
+        Row(String path, String name, boolean added, boolean enabled, String oldName,
+            String status, boolean checked) {
             this.path = path;
             this.name = name;
             this.added = added;
             this.enabled = enabled;
             this.oldName = oldName == null ? "" : oldName;
+            this.status = status == null ? "" : status;
+            this.checked = checked;
         }
     }
 
@@ -107,14 +120,29 @@ final class OptionalModsDialog {
      *
      * 见 {@link Result}
      */
-    @SuppressWarnings("unchecked")
     static Result ask(Component parent, List<Row> rows) {
+        return ask(parent, rows, Text.of(Msg.DIALOG_HEADER, rows.size()));
+    }
+
+    /**
+     * 弹出勾选窗并等待用户确认，表头文字由调用方给
+     *
+     * - `parent`: 父窗口，可为 null
+     * - `rows`: 要列出的条目
+     * - `header`: 表格上方的说明文字
+     *
+     * # 返回值
+     *
+     * 见 {@link Result}
+     */
+    @SuppressWarnings("unchecked")
+    static Result ask(Component parent, List<Row> rows, String header) {
         if (SwingUtilities.isEventDispatchThread()) {
-            return show(parent, rows);
+            return show(parent, rows, header);
         }
         final Result[] result = new Result[1];
         try {
-            SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows));
+            SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows, header));
         } catch (Exception e) {
             // 弹不出来别拦住同步：按全部更新处理
             Log.error(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG) + e.getMessage());
@@ -123,7 +151,7 @@ final class OptionalModsDialog {
         return result[0];
     }
 
-    private static Result show(Component parent, List<Row> rows) {
+    private static Result show(Component parent, List<Row> rows, String header) {
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MOD_UPDATES), true);
         dialog.setMinimumSize(new Dimension(680, 360));
 
@@ -143,7 +171,7 @@ final class OptionalModsDialog {
             }
         };
         for (Row row : rows) {
-            model.addRow(new Object[]{Boolean.TRUE, row.name, row.path, stateText(row)});
+            model.addRow(new Object[]{row.checked, row.name, row.path, stateText(row)});
         }
 
         final JTable table = new JTable(model);
@@ -256,7 +284,7 @@ final class OptionalModsDialog {
             dialog.dispose();
         }, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
 
-        JLabel title = new JLabel(Text.of(Msg.DIALOG_HEADER, rows.size()));
+        JLabel title = new JLabel(header);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
         JLabel hint = new JLabel(Text.of(Msg.UNCHECKED_MODS_KEEP_THE_OLDER_LOCAL_VERSION_THE_PUBLISHER_WILL_NOT_ASK_AGAIN_UNTIL_THE_CONTENT_CHANGES));
         hint.setFont(hint.getFont().deriveFont(Font.PLAIN, 11f));
@@ -308,6 +336,10 @@ final class OptionalModsDialog {
     }
 
     private static String stateText(Row row) {
+        // 管理模式下状态由调用方给：需更新 / 已同步 / 已跳过
+        if (!row.status.isEmpty()) {
+            return row.status;
+        }
         if (row.added) {
             return Text.of(Msg.ADDED);
         }
@@ -365,11 +397,16 @@ final class OptionalModsDialog {
     private static Color foregroundOf(int column, Object value) {
         String text = value == null ? "" : value.toString();
         if (column == 3) {
-            if (text.startsWith(Text.of(Msg.ADDED))) {
+            if (text.startsWith(Text.of(Msg.ADDED))
+                    || text.startsWith(Text.of(Msg.STATUS_UP_TO_DATE))) {
                 return ADDED;
             }
-            if (text.startsWith(Text.of(Msg.DISABLED))) {
+            if (text.startsWith(Text.of(Msg.DISABLED))
+                    || text.startsWith(Text.of(Msg.STATUS_SKIPPED))) {
                 return DISABLED;
+            }
+            if (text.startsWith(Text.of(Msg.STATUS_NEEDS_UPDATE))) {
+                return NEEDS_UPDATE;
             }
         }
         return TEXT;

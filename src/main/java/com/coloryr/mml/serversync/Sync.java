@@ -48,6 +48,10 @@ final class Sync {
      * 一句话结果，给进度窗口与日志用
      */
     String run() throws IOException {
+        // 「自选模组」在清单下载期间就可点：请求由安全点接管
+        if (canAsk()) {
+            ((ProgressWindow) ui).showOptionalModsButton();
+        }
         ui.stage(Text.of(Msg.FETCHING_MANIFEST_FINGERPRINT));
         String manifestUrl;
         byte[] data;
@@ -98,8 +102,16 @@ final class Sync {
         // 上次跳过的可选模组：这次发布方没换内容就不再问
         List<Skipped.Entry> previousSkipped = Skipped.load(options.stateDir);
         Set<String> skipPaths = new HashSet<>(options.skip);
+        // 安全点一：清单就绪、还没动任何文件，点过「自选模组」就先按全量列表处理一轮
+        ManageResult firstStop = manageCheckpoint(current, old, previousSkipped, skipPaths);
+        if (firstStop == ManageResult.CANCELLED) {
+            info(Text.of(Msg.SYNC_CANCELLED_NO_FILES_CHANGED));
+            return Text.of(Msg.SYNC_CANCELLED);
+        }
+        boolean managed = firstStop == ManageResult.APPLIED;
         List<Manifest.FileEntry> optionalChanges = changedOptional(current, old, previousSkipped);
-        if (!options.dryRun && skipPaths.isEmpty() && !optionalChanges.isEmpty() && canAsk()) {
+        // 管理窗已列过全量条目并让用户确认过，不再重复弹会变的那几条
+        if (!options.dryRun && !managed && skipPaths.isEmpty() && !optionalChanges.isEmpty() && canAsk()) {
             ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
             OptionalModsDialog.Result choice = askOptionalMods(optionalChanges, old);
             if (choice.endGame) {
@@ -117,6 +129,19 @@ final class Sync {
 
         // 删旧文件之前先记下玩家启用着的条目：可选模组换文件名时按它延续启用状态
         Set<String> keptEnabled = enabledIdentities(old, previousSkipped);
+
+        // 安全点二：下载计划在这里定稿，按钮随之收起
+        int skipsBeforePlan = skipPaths.size();
+        if (manageCheckpoint(current, old, previousSkipped, skipPaths) == ManageResult.CANCELLED) {
+            info(Text.of(Msg.SYNC_CANCELLED_NO_FILES_CHANGED));
+            return Text.of(Msg.SYNC_CANCELLED);
+        }
+        if (ui instanceof ProgressWindow) {
+            ((ProgressWindow) ui).hideOptionalModsButton();
+        }
+        if (skipPaths.size() != skipsBeforePlan && !skipPaths.isEmpty()) {
+            info(Text.of(Msg.SKIPPING_OPTIONAL_COUNT, skipPaths.size()));
+        }
 
         Set<String> skippedIdentities = skippedIdentities(current, skipPaths);
         List<String> removedDirs = new ArrayList<>();
@@ -539,7 +564,19 @@ final class Sync {
     /** 组装并弹出勾选窗，返回未勾选的路径 */
     private OptionalModsDialog.Result askOptionalMods(List<Manifest.FileEntry> items, Manifest old)
             throws IOException {
+        return askOptionalMods(changedRows(items, old), Text.of(Msg.DIALOG_HEADER, items.size()));
+    }
+
+    /** 弹出勾选窗，表头文字由调用方给；返回未勾选的路径 */
+    private OptionalModsDialog.Result askOptionalMods(List<OptionalModsDialog.Row> rows,
+                                                      String header) {
         javax.swing.JFrame parent = ((ProgressWindow) ui).frame();
+        return OptionalModsDialog.ask(parent, rows, header);
+    }
+
+    /** 会变的可选模组的行：状态列沿用启用 / 禁用 / 新增 */
+    private List<OptionalModsDialog.Row> changedRows(List<Manifest.FileEntry> items, Manifest old)
+            throws IOException {
         List<OptionalModsDialog.Row> rows = new ArrayList<>(items.size());
         for (Manifest.FileEntry item : items) {
             Manifest.FileEntry before = findByIdentity(old, item.identity());
@@ -550,7 +587,104 @@ final class Sync {
             rows.add(new OptionalModsDialog.Row(item.path, name, before == null,
                     existing != null && !isDisabled(existing), oldName));
         }
-        return OptionalModsDialog.ask(parent, rows);
+        return rows;
+    }
+
+    /** 管理安全点的结果 */
+    private enum ManageResult {
+        /** 没有请求，直接过 */
+        NONE,
+        /** 已按勾选结果更新跳过列表 */
+        APPLIED,
+        /** 用户在管理窗里取消同步 */
+        CANCELLED
+    }
+
+    /**
+     * 「自选模组」安全点：用户点过按钮就暂停同步，弹出全部可选模组的列表，
+     * 勾选结果并进跳过列表后继续；没有请求时直接过。
+     *
+     * 调用位置必须在改动任何文件之前：取消同步的语义是「一个文件都没动」。
+     *
+     * - `current`: 远程清单
+     * - `old`: 本地旧清单，没有时传 null
+     * - `previousSkipped`: 上次的跳过记录
+     * - `skipPaths`: 这次跳过的路径，勾选结果并入这里
+     *
+     * # 返回值
+     *
+     * 见 {@link ManageResult}
+     */
+    private ManageResult manageCheckpoint(Manifest current, Manifest old,
+                                          List<Skipped.Entry> previousSkipped,
+                                          Set<String> skipPaths) throws IOException {
+        if (options.dryRun || !canAsk()) {
+            return ManageResult.NONE;
+        }
+        ProgressWindow window = (ProgressWindow) ui;
+        if (!window.consumeOptionalRequest()) {
+            return ManageResult.NONE;
+        }
+        ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
+        List<OptionalModsDialog.Row> rows = allOptionalRows(current, old, previousSkipped, skipPaths);
+        OptionalModsDialog.Result choice = askOptionalMods(rows,
+                Text.of(Msg.DIALOG_HEADER_ALL, rows.size()));
+        window.rearmOptionalModsButton();
+        if (choice.endGame) {
+            throw new SyncAbortException(Text.of(Msg.CANCEL_AFTER_ENDED));
+        }
+        if (choice.cancelled) {
+            return ManageResult.CANCELLED;
+        }
+        skipPaths.addAll(choice.unchecked);
+        return ManageResult.APPLIED;
+    }
+
+    /**
+     * 全部可选模组的行：状态区分需更新 / 已同步 / 已跳过
+     *
+     * 判据与 changedOptional 一致：内容与本地一致的是已同步，上次跳过且内容没变的
+     * 是已跳过（默认不勾选），其余是需更新。
+     */
+    private List<OptionalModsDialog.Row> allOptionalRows(Manifest current, Manifest old,
+                                                         List<Skipped.Entry> previous,
+                                                         Set<String> skipPaths) throws IOException {
+        List<OptionalModsDialog.Row> rows = new ArrayList<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (!item.optional) {
+                continue;
+            }
+            String status;
+            boolean checked;
+            if (skipPaths.contains(item.path) || skippedBefore(previous, item)) {
+                status = Text.of(Msg.STATUS_SKIPPED);
+                checked = false;
+            } else if (needsUpdate(item, old)) {
+                status = Text.of(Msg.STATUS_NEEDS_UPDATE);
+                checked = true;
+            } else {
+                status = Text.of(Msg.STATUS_UP_TO_DATE);
+                checked = true;
+            }
+            Manifest.FileEntry before = findByIdentity(old, item.identity());
+            Path existing = existingVariant(Fs.resolveSafe(options.gameDir, item.path));
+            String name = item.fileName();
+            String oldName = existing == null || existing.getFileName().toString().equals(name)
+                    ? "" : existing.getFileName().toString();
+            rows.add(new OptionalModsDialog.Row(item.path, name, before == null,
+                    existing != null && !isDisabled(existing), oldName, status, checked));
+        }
+        return rows;
+    }
+
+    /** 内容与本地是否对得上：清单里同一身份变了，或本地文件哈希不一致 */
+    private boolean needsUpdate(Manifest.FileEntry item, Manifest old) throws IOException {
+        Manifest.FileEntry before = findByIdentity(old, item.identity());
+        if (before == null || !before.hasSameContent(item)) {
+            return true;
+        }
+        Path existing = existingVariant(Fs.resolveSafe(options.gameDir, item.path));
+        return existing == null || !Downloader.matches(existing, item.sha1, item.sha256);
     }
 
     /** 本次跳过的条目的身份，用于保护旧文件不被删除 */
