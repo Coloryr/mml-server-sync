@@ -196,7 +196,8 @@ final class OptionalModsDialog {
 
         final JCheckBox all = new JCheckBox(Text.of(Msg.SELECT_ALL), true);
         final JLabel count = new JLabel();
-        final JButton ok = new JButton();
+        // 按钮文字固定：带已选数量的文字会随勾选变化，按钮宽度与位置跟着左右跳
+        final JButton ok = new JButton(Text.of(Msg.CONFIRM_SELECTION));
 
         Runnable refresh = () -> {
             int checked = 0;
@@ -206,7 +207,8 @@ final class OptionalModsDialog {
                 }
             }
             count.setText(Text.of(Msg.SELECTED_COUNT, checked, model.getRowCount()));
-            ok.setText(Text.of(Msg.CONFIRM_SELECTION, checked));
+            // 全选勾选框反映实际状态：取消任意一行后它自动落回未勾选
+            all.setSelected(checked > 0 && checked == model.getRowCount());
         };
         model.addTableModelListener(event -> refresh.run());
         // 「全选」始终是勾选全部：按切换语义点一下会把全部清空，与直觉相反
@@ -214,7 +216,6 @@ final class OptionalModsDialog {
             for (int i = 0; i < model.getRowCount(); i++) {
                 model.setValueAt(Boolean.TRUE, i, 0);
             }
-            all.setSelected(true);
             refresh.run();
         });
 

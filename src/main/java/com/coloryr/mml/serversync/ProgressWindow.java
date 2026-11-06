@@ -3,7 +3,6 @@ package com.coloryr.mml.serversync;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -16,6 +15,7 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
@@ -76,8 +76,11 @@ final class ProgressWindow implements Progress {
         stageLabel = new JLabel(Text.of(Msg.PREPARING));
         detailLabel = new JLabel(" ");
         detailLabel.setFont(detailLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        // 固定首选宽度：文件名长短不能挤压按钮区（超宽的 WEST 会把 EAST 挤变形）
-        detailLabel.setPreferredSize(new Dimension(250, 18));
+        detailLabel.setVerticalAlignment(SwingConstants.CENTER);
+        // 细节行只占底部行的剩余宽度：首选宽度给一个下限即可，
+        // 实际宽度由布局分配，长文件名被截断而不会把按钮挤变形
+        detailLabel.setPreferredSize(new Dimension(120, 18));
+        detailLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 10));
 
         bar = new JProgressBar(0, 100);
         bar.setStringPainted(true);
@@ -90,15 +93,22 @@ final class ProgressWindow implements Progress {
 
         cancelButton = new JButton(Text.of(Msg.CANCEL_UPDATE));
         cancelButton.addActionListener(event -> requestCancel());
-        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先置灰。
-        // 与取消更新同尺寸并排放置（FlowLayout 自然尺寸），不横向拉伸
+        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先置灰
         optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
         optionalButton.setEnabled(false);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        // 两个按钮取同一个尺寸：不同语言下文字长短不同，各按自身文字算宽度会一大一小
+        Dimension optionalSize = optionalButton.getPreferredSize();
+        Dimension cancelSize = cancelButton.getPreferredSize();
+        Dimension buttonSize = new Dimension(Math.max(optionalSize.width, cancelSize.width),
+                Math.max(optionalSize.height, cancelSize.height));
+        optionalButton.setPreferredSize(buttonSize);
+        cancelButton.setPreferredSize(buttonSize);
+        // 等分两列，按钮尺寸与位置只由这里决定，与细节行文字长短无关
+        JPanel buttons = new JPanel(new GridLayout(1, 2, 8, 0));
         buttons.add(optionalButton);
         buttons.add(cancelButton);
-        JPanel south = new JPanel(new BorderLayout());
-        south.add(detailLabel, BorderLayout.WEST);
+        JPanel south = new JPanel(new BorderLayout(0, 0));
+        south.add(detailLabel, BorderLayout.CENTER);
         south.add(buttons, BorderLayout.EAST);
 
         JPanel root = new JPanel(new BorderLayout(0, 8));

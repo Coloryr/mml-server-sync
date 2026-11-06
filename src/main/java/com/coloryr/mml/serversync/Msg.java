@@ -56,7 +56,7 @@ enum Msg {
     STATUS_COLUMN("状态", "Status"),
     DESC_COLUMN("介绍", "Description"),
     SELECT_ALL("全选", "Select all"),
-    CONFIRM_SELECTION("确定（已选 %s 项）", "OK (%s selected)"),
+    CONFIRM_SELECTION("确定", "OK"),
     HEADER_FIRST_RUN("首次同步：请勾选要启用的自选模组", "First sync: choose which optional mods to enable"),
     HEADER_CHANGES("有 %s 个自选模组是新增或内容更新", "%s optional mod(s) are new or updated"),
     HEADER_MANAGE("管理自选模组（共 %s 个）", "Manage optional mods (%s total)"),
