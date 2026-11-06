@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.GZIPInputStream;
 
 /** HTTP 下载、平台地址解析与哈希校验。 */
 final class Downloader {
@@ -231,8 +232,8 @@ final class Downloader {
      * 响应体内容；取不到时抛 IOException
      */
     byte[] fetchQuiet(String url) throws IOException {
-        URLConnection connection = open(url, Collections.<String, String>emptyMap());
-        try (InputStream input = connection.getInputStream()) {
+        URLConnection connection = open(url, Collections.<String, String>emptyMap(), true);
+        try (InputStream input = body(connection)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[16 * 1024];
             int read;
@@ -247,13 +248,28 @@ final class Downloader {
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
-        URLConnection connection = open(url, headers);
-        try (InputStream input = connection.getInputStream()) {
+        URLConnection connection = open(url, headers, true);
+        try (InputStream input = body(connection)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[16 * 1024];
             int read;
+            long lastCancelCheck = 0;
+            long lastDone = 0;
+            long lastTime = System.nanoTime();
             while ((read = input.read(buffer)) >= 0) {
                 out.write(buffer, 0, read);
+                long done = out.size();
+                // 清单体积可达数 MB，下载期间同样要允许取消
+                if (done - lastCancelCheck >= 1048576L) {
+                    lastCancelCheck = done;
+                    Cancels.check();
+                }
+                long now = System.nanoTime();
+                if (!quiet && now - lastTime >= REPORT_INTERVAL) {
+                    reportManifest(done, done - lastDone, now - lastTime);
+                    lastDone = done;
+                    lastTime = now;
+                }
             }
             if (!quiet) {
                 Log.info(Text.of(Msg.DOWNLOADER_JSON_FETCHED, out.size(), url));
@@ -262,7 +278,28 @@ final class Downloader {
         }
     }
 
+    /** 打印一条清单接收进度，约每秒一条，格式与文件下载的 [download] 对齐 */
+    private static void reportManifest(long done, long delta, long elapsed) {
+        double seconds = elapsed / 1_000_000_000.0;
+        double speed = seconds <= 0 ? 0 : delta / 1048576.0 / seconds;
+        Log.info("[manifest] " + String.format(Locale.ROOT, "%.1f MB (%.2f MB/s)",
+                done / 1048576.0, speed));
+    }
+
+    /** 清单字节必须是解压后的原文，saveState 与 server.json.sha1 都以这份字节为准 */
+    private static InputStream body(URLConnection connection) throws IOException {
+        InputStream input = connection.getInputStream();
+        String encoding = connection.getContentEncoding();
+        return encoding != null && encoding.toLowerCase(Locale.ROOT).contains("gzip")
+                ? new GZIPInputStream(input) : input;
+    }
+
     private static URLConnection open(String text, Map<String, String> headers) throws IOException {
+        return open(text, headers, false);
+    }
+
+    /** 仅清单类请求协商压缩；文件下载依赖 Content-Length 计算进度，压缩会使其失真 */
+    private static URLConnection open(String text, Map<String, String> headers, boolean gzip) throws IOException {
         URL url;
         try {
             url = new URL(text);
@@ -279,6 +316,9 @@ final class Downloader {
             HttpURLConnection http = (HttpURLConnection) connection;
             http.setInstanceFollowRedirects(true);
             http.setRequestProperty("User-Agent", "MML-ServerSync/1.0");
+            if (gzip) {
+                http.setRequestProperty("Accept-Encoding", "gzip");
+            }
             int code = http.getResponseCode();
             if (code < 200 || code >= 300) {
                 throw new IOException("HTTP " + code + ": " + text);

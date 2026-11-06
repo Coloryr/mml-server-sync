@@ -34,6 +34,8 @@ MML 服务器实例专用更新器，只读取 MML 生成的 `server.json`，同
 - 同步日志写在 `<状态目录>/mml-server-sync.log`，每行以 `[MML-SERVER-SYNC]` 开头，
   日志文件可用 `-Dmml.serverSync.log=...` 覆盖。
 - 下载时每秒打一条字节进度，例如 `[download] config.zip 43% (9.2/22.0 MB, 6.3 MB/s)`。
+- 清单下载同样每秒打一条 `[manifest]` 进度，并向服务器协商 gzip；服务端不支持压缩时按原样读取。
+  解压后的清单字节才是状态文件与 `server.json.sha1` 比对的对象。
 - 命令行模式仍然可用，见下文；两种模式共用同一个 jar。
 
 ### 怎么识别 MML 启动器
