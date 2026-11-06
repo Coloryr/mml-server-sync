@@ -670,18 +670,17 @@ final class Sync {
     /**
      * 运行中的原始更新器 jar 对游戏目录的相对路径
      *
-     * jar 不在游戏目录内、跨盘或未捕获时返回空串——相对化会带 .. 或抛异常，
+     * jar 不在游戏目录内、跨盘或找不到时返回空串——相对化会带 .. 或抛异常，
      * 而清单路径不允许 ..，永远不会与这种值相等。
      */
     private String selfJarRelative() {
-        String property = System.getProperty(Updater.SELF_JAR_KEY, "").trim();
-        if (property.isEmpty()) {
+        Path jar = Updater.originalJarPath();
+        if (jar == null) {
             return "";
         }
         try {
-            Path jar = java.nio.file.Paths.get(property).toAbsolutePath().normalize();
-            return options.gameDir.toAbsolutePath().normalize().relativize(jar)
-                    .toString().replace('\\', '/');
+            return options.gameDir.toAbsolutePath().normalize().relativize(
+                    jar.toAbsolutePath().normalize()).toString().replace('\\', '/');
         } catch (RuntimeException e) {
             return "";
         }

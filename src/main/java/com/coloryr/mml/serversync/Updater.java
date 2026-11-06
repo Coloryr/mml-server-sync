@@ -150,6 +150,52 @@ final class Updater {
     }
 
     /**
+     * 原始 jar（被 -javaagent / -jar 指定、JVM 锁住的那份）的路径。
+     *
+     * 顺序：入口捕获的系统属性 → 当前类加载源（不经 update/ 运行时就是原始 jar）→
+     * 从 update/ 包运行时到它的上级目录找 `mml-server-sync*.jar`。最后这条兜底覆盖
+     * 「旧版本入口还没有捕获逻辑」的过渡期：第一次自更新到本版本后，运行代码来自
+     * update/，而锁住的原始 jar 是旧入口那份，属性尚未由它写入。
+     *
+     * # 返回值
+     *
+     * 原始 jar 路径；找不到时返回 null
+     */
+    static Path originalJarPath() {
+        String property = System.getProperty(SELF_JAR_KEY, "").trim();
+        if (!property.isEmpty()) {
+            return Paths.get(property);
+        }
+        Path running = jarPath();
+        if (running == null) {
+            return null;
+        }
+        Path parent = running.toAbsolutePath().normalize().getParent();
+        if (parent == null || !UPDATE_DIR.equalsIgnoreCase(parent.getFileName().toString())) {
+            return running;
+        }
+        Path originDir = parent.getParent();
+        if (originDir == null) {
+            return null;
+        }
+        Path preferred = originDir.resolve("mml-server-sync.jar");
+        if (Files.isRegularFile(preferred)) {
+            return preferred;
+        }
+        try (DirectoryStream<Path> stream =
+                     Files.newDirectoryStream(originDir, FILE_PREFIX + "*" + FILE_SUFFIX)) {
+            for (Path candidate : stream) {
+                if (Files.isRegularFile(candidate)) {
+                    return candidate;
+                }
+            }
+        } catch (IOException ignored) {
+            // 找不到就当没有，跳过逻辑退化为不跳过
+        }
+        return null;
+    }
+
+    /**
      * 当前运行的 jar 路径
      *
      * # 返回值
