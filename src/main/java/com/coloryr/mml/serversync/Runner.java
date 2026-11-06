@@ -40,10 +40,10 @@ public final class Runner {
                 return 0;
             }
             if (options.manifest == null || options.manifest.trim().isEmpty()) {
-                throw new UsageException("缺少 --manifest <URL 或文件>");
+                throw new UsageException(Text.of(Msg.MISSING_MANIFEST_URL_OR_FILE));
             }
             if (options.gameDir == null) {
-                throw new UsageException("缺少 --game-dir <游戏目录>");
+                throw new UsageException(Text.of(Msg.MISSING_GAME_DIR_GAME_DIRECTORY));
             }
             options.gameDir = options.gameDir.toAbsolutePath().normalize();
             options.baseDir = options.baseDir == null
@@ -58,7 +58,7 @@ public final class Runner {
                     ? options.stateDir.resolve(Log.FILE_NAME)
                     : options.logFile.toAbsolutePath().normalize());
             Log.info("mml-server-sync " + Main.VERSION);
-            Log.info("开始同步，游戏目录 " + options.gameDir);
+            Log.info(Text.of(Msg.STARTING_SYNC_GAME_DIRECTORY) + options.gameDir);
             try {
                 String summary = new Sync(options, ui).run();
                 if (!options.quiet) {
@@ -67,18 +67,18 @@ public final class Runner {
                 ui.finish(true, summary);
             } catch (Exception e) {
                 ui.finish(false, e.getMessage());
-                Log.error("同步失败: " + e.getMessage());
+                Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
                 throw e;
             } finally {
                 Log.close();
             }
             return 0;
         } catch (UsageException e) {
-            System.err.println(Log.PREFIX + "参数错误: " + e.getMessage());
-            System.err.println(Log.PREFIX + "使用 --help 查看用法");
+            System.err.println(Log.PREFIX + Text.of(Msg.INVALID_ARGUMENT) + e.getMessage());
+            System.err.println(Log.PREFIX + Text.of(Msg.USE_HELP_FOR_USAGE));
             return 2;
         } catch (Exception e) {
-            System.err.println(Log.PREFIX + "同步失败: " + e.getMessage());
+            System.err.println(Log.PREFIX + Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
             return 1;
         }
     }
@@ -152,9 +152,9 @@ public final class Runner {
             } else if ("--skip-file".equals(arg)) {
                 options.skipFile = Paths.get(value(args, ++i, arg));
             } else if (!arg.startsWith("-")) {
-                throw new UsageException("不认识的参数: " + arg);
+                throw new UsageException(Text.of(Msg.UNKNOWN_ARGUMENT) + arg);
             } else {
-                throw new UsageException("不认识的参数: " + arg);
+                throw new UsageException(Text.of(Msg.UNKNOWN_ARGUMENT) + arg);
             }
         }
         if (options.apiKey.isEmpty()) {
@@ -200,7 +200,7 @@ public final class Runner {
                 options.skip.add(path);
             }
         } catch (java.io.IOException e) {
-            throw new UsageException("--skip-file 读取失败: " + e.getMessage());
+            throw new UsageException(Text.of(Msg.FAILED_TO_READ_SKIP_FILE) + e.getMessage());
         }
     }
 
@@ -209,61 +209,62 @@ public final class Runner {
         try {
             return Math.max(1, Math.min(64, Integer.parseInt(value.trim())));
         } catch (NumberFormatException e) {
-            throw new UsageException("--threads 需要整数: " + value);
+            throw new UsageException(Text.of(Msg.THREADS_NEEDS_AN_INTEGER) + value);
         }
     }
 
     private static String value(String[] args, int index, String option) throws UsageException {
         if (index >= args.length || args[index].startsWith("-")) {
-            throw new UsageException(option + " 缺少值");
+            throw new UsageException(option + Text.of(Msg.IS_MISSING_A_VALUE));
         }
         return args[index];
     }
 
     private static void printHelp() {
         System.out.println("mml-server-sync " + Main.VERSION);
-        System.out.println("独立服务器实例更新器，适用于非 MML 启动器的 pre-launch 更新。");
+        System.out.println(Text.of(Msg.STANDALONE_SERVER_INSTANCE_UPDATER_FOR_PRE_LAUNCH_UPDATES_FROM_NON_MML_LAUNCHERS));
         System.out.println();
-        System.out.println("Java Agent（推荐）:");
-        System.out.println("  -javaagent:mml-server-sync.jar=<server.json 的 URL>");
-        System.out.println("  MML 启动器启动时自动跳过，MML_SKIP=true 可强制不跳过；游戏工作目录必须是 .minecraft。");
+        System.out.println(Text.of(Msg.JAVA_AGENT_RECOMMENDED));
+        System.out.println(Text.of(Msg.JAVAAGENT_MML_SERVER_SYNC_JAR_URL_OF_SERVER_JSON));
+        System.out.println(Text.of(Msg.SKIPPED_AUTOMATICALLY_UNDER_THE_MML_LAUNCHER_SET_MML_SKIP_TRUE_TO_FORCE_IT_THE_WORKING_DIRECTORY_MUST_BE_MINECRAFT));
         System.out.println();
-        System.out.println("命令行用法:");
-        System.out.println("  java -jar mml-server-sync.jar --manifest <URL|文件> --game-dir <目录> [选项]");
+        System.out.println(Text.of(Msg.COMMAND_LINE));
+        System.out.println(Text.of(Msg.JAVA_JAR_MML_SERVER_SYNC_JAR_MANIFEST_URL_FILE_GAME_DIR_DIR_OPTIONS));
         System.out.println();
-        System.out.println("参数:");
-        System.out.println("  --manifest, -m      MML server.json 的 URL / 本地路径");
-        System.out.println("  --game-dir, -g      游戏目录，例如 .minecraft；模组/配置文件写到这里");
-        System.out.println("  --base-dir          MML 基础包解压根目录；默认 .minecraft 的父目录，否则同 game-dir");
-        System.out.println("  --state-dir         清单状态目录；默认 <game-dir>/.mml-server-sync");
-        System.out.println("  --force             包版本相同也强制同步");
-        System.out.println("  --dry-run           只打印计划，不下载/删除/解压");
-        System.out.println("  --no-delete         不删除旧文件/旧配置目录");
-        System.out.println("  --curseforge-api-key CurseForge API Key；缺省读 CURSEFORGE_API_KEY");
-        System.out.println("  --log               同步日志文件；默认 <状态目录>/mml-server-sync.log");
-        System.out.println("  --threads           同时下载的文件数，1-64；默认 16");
-        System.out.println("  --skip              这次不更新的可选模组，清单相对路径，可重复或逗号分隔");
-        System.out.println("  --skip-file         从文件读要跳过的路径，UTF-8，一行一个");
-        System.out.println("  --no-gui            不显示同步进度窗口");
-        System.out.println("  --no-ask            不弹可选模组勾选窗，全部更新");
-        System.out.println("  --no-update         不检查自更新");
-        System.out.println("  --update-index      自更新索引地址；默认 https://www.coloryr.com/mml-server-sync/index.json");
-        System.out.println("  --quiet             少输出");
-        System.out.println("  --version           显示版本");
-        System.out.println("  --help, -h          显示帮助");
+        System.out.println(Text.of(Msg.OPTIONS));
+        System.out.println(Text.of(Msg.MANIFEST_M_URL_OR_LOCAL_PATH_OF_THE_MML_SERVER_JSON));
+        System.out.println(Text.of(Msg.GAME_DIR_G_GAME_DIRECTORY_E_G_MINECRAFT_MODS_AND_CONFIGS_GO_HERE));
+        System.out.println(Text.of(Msg.BASE_DIR_ROOT_FOR_THE_MML_BASE_PACK_PARENT_OF_MINECRAFT_OTHERWISE_GAME_DIR));
+        System.out.println(Text.of(Msg.STATE_DIR_MANIFEST_STATE_DIRECTORY_DEFAULT_GAME_DIR_MML_SERVER_SYNC));
+        System.out.println(Text.of(Msg.FORCE_SYNC_EVEN_WHEN_THE_PACK_VERSION_IS_UNCHANGED));
+        System.out.println(Text.of(Msg.DRY_RUN_PRINT_THE_PLAN_ONLY_NO_DOWNLOAD_DELETE_EXTRACT));
+        System.out.println(Text.of(Msg.NO_DELETE_DO_NOT_DELETE_OLD_FILES_OR_CONFIG_DIRECTORIES));
+        System.out.println(Text.of(Msg.CURSEFORGE_API_KEY_CURSEFORGE_API_KEY_DEFAULTS_TO_CURSEFORGE_API_KEY));
+        System.out.println(Text.of(Msg.LOG_SYNC_LOG_FILE_DEFAULT_STATE_DIR_MML_SERVER_SYNC_LOG));
+        System.out.println(Text.of(Msg.THREADS_CONCURRENT_DOWNLOADS_1_64_DEFAULT_16));
+        System.out.println(Text.of(Msg.SKIP_OPTIONAL_MODS_NOT_TO_UPDATE_MANIFEST_RELATIVE_PATHS_REPEATABLE_OR_COMMA_SEPARATED));
+        System.out.println(Text.of(Msg.SKIP_FILE_READ_SKIP_PATHS_FROM_A_UTF_8_FILE_ONE_PER_LINE));
+        System.out.println(Text.of(Msg.NO_GUI_DO_NOT_SHOW_THE_PROGRESS_WINDOW));
+        System.out.println(Text.of(Msg.NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL));
+        System.out.println(Text.of(Msg.NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES));
+        System.out.println(Text.of(Msg.UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON));
+        System.out.println(Text.of(Msg.QUIET_LESS_OUTPUT));
+        System.out.println(Text.of(Msg.VERSION_SHOW_VERSION));
+        System.out.println(Text.of(Msg.HELP_H_SHOW_HELP));
         System.out.println();
-        System.out.println("示例:");
+        System.out.println(Text.of(Msg.EXAMPLES));
         System.out.println("  java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft");
         System.out.println("  java -jar mml-server-sync.jar -m ./server.json -g ./instance/.minecraft --base-dir ./instance");
         System.out.println("  java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft --skip=mods/b.jar --skip=mods/c.jar");
         System.out.println();
-        System.out.println("说明:");
-        System.out.println("  - 有 PackVersion 且未变时跳过；--force 可强制。");
-        System.out.println("  - 只读取 MML server.json 的 Files / Archives / Base。");
-        System.out.println("  - CurseForge 没有 URL 时用 fileId 推 CDN；Modrinth 用公开 API 查地址。");
-        System.out.println("  - 只支持 zip 配置包；生成器的 Archives / Base 都是 zip。");
-        System.out.println("  - 环境变量 MML_SKIP=true 跳过 MML 启动器识别。");
-        System.out.println("  - 会删除旧清单里有、当前清单没有的受管文件；不碰清单外的用户文件。");
+        System.out.println(Text.of(Msg.NOTES));
+        System.out.println(Text.of(Msg.SKIPPED_WHEN_PACKVERSION_IS_UNCHANGED_FORCE_OVERRIDES));
+        System.out.println(Text.of(Msg.ONLY_FILES_ARCHIVES_BASE_OF_THE_MML_SERVER_JSON_ARE_READ));
+        System.out.println(Text.of(Msg.CURSEFORGE_ENTRIES_WITHOUT_A_URL_FALL_BACK_TO_THE_CDN_MODRINTH_USES_ITS_PUBLIC_API));
+        System.out.println(Text.of(Msg.ONLY_ZIP_CONFIG_PACKS_ARE_SUPPORTED_THE_GENERATOR_EMITS_ZIP_FOR_ARCHIVES_BASE));
+        System.out.println(Text.of(Msg.MML_SKIP_TRUE_SKIPS_THE_MML_LAUNCHER_DETECTION));
+        System.out.println(Text.of(Msg.MANAGED_FILES_DROPPED_FROM_THE_NEW_MANIFEST_ARE_REMOVED_FILES_OUTSIDE_IT_ARE_UNTOUCHED));
+        System.out.println(Text.of(Msg.LANGUAGE_NOTE));
     }
 
     private static final class UsageException extends Exception {

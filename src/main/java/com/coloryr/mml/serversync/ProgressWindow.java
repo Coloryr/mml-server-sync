@@ -28,7 +28,7 @@ import com.coloryr.mml.serversync.host.Progress;
  */
 final class ProgressWindow implements Progress {
     /** 窗口标题 */
-    private static final String TITLE = "MML 服务器实例同步";
+    private static final String TITLE = Text.of(Msg.MML_SERVER_INSTANCE_SYNC);
 
     private final JFrame frame;
     private final JLabel titleLabel;
@@ -53,9 +53,9 @@ final class ProgressWindow implements Progress {
         frame.setResizable(false);
         frame.setAlwaysOnTop(true);
 
-        titleLabel = new JLabel("正在同步服务器实例");
+        titleLabel = new JLabel(Text.of(Msg.SYNCING_SERVER_INSTANCE));
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 13f));
-        stageLabel = new JLabel("正在准备");
+        stageLabel = new JLabel(Text.of(Msg.PREPARING));
         detailLabel = new JLabel(" ");
         detailLabel.setFont(detailLabel.getFont().deriveFont(Font.PLAIN, 11f));
 
@@ -127,7 +127,7 @@ final class ProgressWindow implements Progress {
 
     @Override
     public void title(String text) {
-        update(() -> titleLabel.setText(text == null || text.isEmpty() ? "正在同步服务器实例" : text));
+        update(() -> titleLabel.setText(text == null || text.isEmpty() ? Text.of(Msg.SYNCING_SERVER_INSTANCE) : text));
     }
 
     @Override
@@ -172,8 +172,8 @@ final class ProgressWindow implements Progress {
             }
             bar.setIndeterminate(false);
             bar.setValue(bar.getMaximum());
-            bar.setString(ok ? "完成" : "失败");
-            stageLabel.setText(message == null || message.isEmpty() ? (ok ? "同步完成" : "同步失败") : message);
+            bar.setString(ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
+            stageLabel.setText(message == null || message.isEmpty() ? (ok ? Text.of(Msg.SYNC_COMPLETE) : Text.of(Msg.SYNC_FAILED)) : message);
             if (!ok) {
                 detailLabel.setForeground(new Color(0xB0, 0x30, 0x30));
             }

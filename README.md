@@ -78,6 +78,11 @@ Java 8 没有 `ProcessHandle`，靠第 1–3 条；只要 MML 开着默认用户
   环境变量 `MML_SERVER_SYNC_NO_GUI=1`。
 - 无图形环境（纯终端服务器、headless）自动不显示，不用额外参数。
 
+## 界面语言
+
+按系统语言自动选：`zh*` 用中文，其余一律英文；窗口、帮助、日志都跟着变。要强制指定用
+`-Dmml.serverSync.lang=zh|en` 或环境变量 `MML_SERVER_SYNC_LANG`。
+
 ## 自更新
 
 启动时检查索引（默认 `https://www.coloryr.com/mml-server-sync/index.json`，与更新用的
@@ -238,6 +243,8 @@ if errorlevel 1 exit /b 1
 
 ## 同步规则
 
+- **清单指纹**：发布目录里有 `server.json.sha1` 时先取它和本地清单比 SHA1，没变就跳过整份
+  下载；没有这个文件、取不到或内容不是 40 位哈希时照旧下载 `server.json`。`--force` 不看指纹。
 - **版本**：清单的 `PackVersion` 与上次状态相同则直接跳过；`--force` 可强制。
 - **文件**：清单 `Files` / `files` 里的相对路径按 SHA1（没有则 SHA256）比对；
   缺失或哈希不同的才下载。被改名停用的文件（`.disabled` / 旧版 `.disable`，不限 `.jar`）

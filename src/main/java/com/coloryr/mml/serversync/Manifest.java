@@ -29,11 +29,11 @@ final class Manifest {
     static Manifest parse(byte[] data) throws IOException {
         Map<String, Object> root = Json.map(Json.parse(data));
         if (root == null) {
-            throw new IOException("清单根节点不是 JSON 对象");
+            throw new IOException(Text.of(Msg.THE_MANIFEST_ROOT_IS_NOT_A_JSON_OBJECT));
         }
         List<Object> rawFiles = Json.list(root.get("Files"));
         if (rawFiles == null) {
-            throw new IOException("不是 MML server.json：缺少 Files 数组");
+            throw new IOException(Text.of(Msg.NOT_AN_MML_SERVER_JSON_MISSING_THE_FILES_ARRAY));
         }
         List<FileEntry> files = new ArrayList<>();
         for (Object raw : rawFiles) {
@@ -43,7 +43,7 @@ final class Manifest {
             }
             String path = Json.string(item, "File");
             if (path.trim().isEmpty()) {
-                throw new IOException("Files 里有空路径");
+                throw new IOException(Text.of(Msg.FILES_CONTAINS_AN_EMPTY_PATH));
             }
             files.add(new FileEntry(path, Json.string(item, "ProjectId"),
                     Json.string(item, "FileId"), Json.string(item, "Url"),
@@ -61,7 +61,7 @@ final class Manifest {
                 String file = Json.string(item, "File");
                 String dir = Json.string(item, "Path");
                 if (file.trim().isEmpty() || dir.trim().isEmpty()) {
-                    throw new IOException("Archives 里有空文件或空目标目录");
+                    throw new IOException(Text.of(Msg.ARCHIVES_CONTAINS_AN_EMPTY_FILE_OR_TARGET_DIRECTORY));
                 }
                 archives.add(new ArchiveEntry(file, dir, Json.bool(item, "Over"),
                         Json.string(item, "Url"), Json.string(item, "Sha1"),
@@ -73,7 +73,7 @@ final class Manifest {
         if (rawBase != null) {
             String file = Json.string(rawBase, "File");
             if (file.trim().isEmpty()) {
-                throw new IOException("Base 缺少文件名");
+                throw new IOException(Text.of(Msg.BASE_IS_MISSING_THE_FILE_NAME));
             }
             base = new BaseEntry(file, Json.string(rawBase, "Url"),
                     Json.string(rawBase, "Sha1"), Json.string(rawBase, "Sha256"));

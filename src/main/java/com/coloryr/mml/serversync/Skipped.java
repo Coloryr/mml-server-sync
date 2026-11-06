@@ -63,7 +63,7 @@ final class Skipped {
                 out.add(new Entry(parts[0], parts[1], parts.length > 2 ? parts[2] : ""));
             }
         } catch (IOException e) {
-            Log.error("读取跳过记录失败: " + e.getMessage());
+            Log.error(Text.of(Msg.FAILED_TO_READ_THE_SKIP_RECORDS) + e.getMessage());
         }
         return out;
     }

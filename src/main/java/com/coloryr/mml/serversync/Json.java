@@ -19,7 +19,7 @@ final class Json {
         Object value = parser.value();
         parser.ws();
         if (parser.pos != text.length()) {
-            throw parser.error("JSON 末尾还有内容");
+            throw parser.error(Text.of(Msg.TRAILING_CONTENT_AFTER_JSON));
         }
         return value;
     }
@@ -67,7 +67,7 @@ final class Json {
         Object value() throws IOException {
             ws();
             if (pos >= text.length()) {
-                throw error("需要 JSON 值");
+                throw error(Text.of(Msg.EXPECTED_A_JSON_VALUE));
             }
             char c = text.charAt(pos);
             switch (c) {
@@ -90,7 +90,7 @@ final class Json {
                     if (c == '-' || (c >= '0' && c <= '9')) {
                         return number();
                     }
-                    throw error("不认识的 JSON 字符: " + c);
+                    throw error(Text.of(Msg.UNEXPECTED_JSON_CHARACTER) + c);
             }
         }
 
@@ -104,7 +104,7 @@ final class Json {
             while (true) {
                 ws();
                 if (pos >= text.length() || text.charAt(pos) != '"') {
-                    throw error("对象键必须是字符串");
+                    throw error(Text.of(Msg.OBJECT_KEYS_MUST_BE_STRINGS));
                 }
                 String key = string();
                 ws();
@@ -148,7 +148,7 @@ final class Json {
                     continue;
                 }
                 if (pos >= text.length()) {
-                    throw error("字符串转义不完整");
+                    throw error(Text.of(Msg.INCOMPLETE_STRING_ESCAPE));
                 }
                 char escape = text.charAt(pos++);
                 switch (escape) {
@@ -162,21 +162,21 @@ final class Json {
                     case 't': out.append('\t'); break;
                     case 'u':
                         if (pos + 4 > text.length()) {
-                            throw error("\\u 转义不完整");
+                            throw error(Text.of(Msg.INCOMPLETE_U_ESCAPE));
                         }
                         String hex = text.substring(pos, pos + 4);
                         try {
                             out.append((char) Integer.parseInt(hex, 16));
                         } catch (NumberFormatException e) {
-                            throw error("非法的 \\u 转义: " + hex);
+                            throw error(Text.of(Msg.INVALID_U_ESCAPE) + hex);
                         }
                         pos += 4;
                         break;
                     default:
-                        throw error("不认识的转义: \\" + escape);
+                        throw error(Text.of(Msg.UNKNOWN_ESCAPE) + escape);
                 }
             }
-            throw error("字符串没有闭合");
+            throw error(Text.of(Msg.UNTERMINATED_STRING));
         }
 
         private Object number() throws IOException {
@@ -205,13 +205,13 @@ final class Json {
             try {
                 return Double.valueOf(text.substring(start, pos));
             } catch (NumberFormatException e) {
-                throw error("非法数字");
+                throw error(Text.of(Msg.INVALID_NUMBER));
             }
         }
 
         private void literal(String word) throws IOException {
             if (!text.startsWith(word, pos)) {
-                throw error("需要 " + word);
+                throw error(Text.of(Msg.EXPECTED) + word);
             }
             pos += word.length();
         }
@@ -219,7 +219,7 @@ final class Json {
         private void expect(char expected) throws IOException {
             ws();
             if (pos >= text.length() || text.charAt(pos) != expected) {
-                throw error("需要 '" + expected + "'");
+                throw error(Text.of(Msg.EXPECTED_2) + expected + "'");
             }
             pos++;
         }
@@ -249,7 +249,7 @@ final class Json {
                     col++;
                 }
             }
-            return new IOException(message + "（第 " + line + " 行，第 " + col + " 列）");
+            return new IOException(message + Text.of(Msg.LINE) + line + Text.of(Msg.COLUMN) + col + Text.of(Msg.TEXT_45));
         }
     }
 }

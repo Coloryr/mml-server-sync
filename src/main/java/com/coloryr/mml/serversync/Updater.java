@@ -60,7 +60,7 @@ final class Updater {
             try {
                 check(index);
             } catch (Throwable e) {
-                Log.info("检查更新失败，忽略: " + describe(e));
+                Log.info(Text.of(Msg.UPDATE_CHECK_FAILED_IGNORING) + describe(e));
             }
         }, "mml-server-sync-update");
         thread.setDaemon(true);
@@ -76,7 +76,7 @@ final class Updater {
     static void check(String indexText) throws IOException {
         Path jar = jarPath();
         if (jar == null) {
-            Log.info("不是以 jar 方式运行，跳过自更新");
+            Log.info(Text.of(Msg.NOT_RUNNING_FROM_A_JAR_SKIPPING_SELF_UPDATE));
             return;
         }
         String index = indexText == null ? "" : indexText.trim();
@@ -87,11 +87,11 @@ final class Updater {
         try {
             root = Json.map(Json.parse(fetch(index)));
         } catch (IOException e) {
-            Log.info("更新索引不可用: " + index + "，" + describe(e));
+            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, describe(e)));
             return;
         }
         if (root == null) {
-            Log.info("更新索引不是 JSON 对象，跳过");
+            Log.info(Text.of(Msg.UPDATE_INDEX_IS_NOT_A_JSON_OBJECT_SKIPPING));
             return;
         }
         String version = Json.string(root, "version", "Version").trim();
@@ -100,7 +100,7 @@ final class Updater {
         String sha1 = Json.string(root, "sha1", "Sha1").trim();
         String sha256 = Json.string(root, "sha256", "Sha256").trim();
         if (version.isEmpty() || url.isEmpty()) {
-            Log.info("更新索引缺少 version / url，跳过");
+            Log.info(Text.of(Msg.UPDATE_INDEX_IS_MISSING_VERSION_URL_SKIPPING));
             return;
         }
         if (compare(version, Main.VERSION) <= 0) {
@@ -111,13 +111,13 @@ final class Updater {
         if (Files.isRegularFile(target) && sameFile(target, sha1, sha256)) {
             return;
         }
-        Log.info("发现新版本 " + version + "（当前 " + Main.VERSION + "），开始下载");
+        Log.info(Text.of(Msg.UPDATER_NEW_VERSION, version, Main.VERSION));
         Files.createDirectories(dir);
         download(url, target, sha1, sha256);
         writeSidecar(target, Verify.SHA1_SIDECAR, sha1);
         writeSidecar(target, SHA256_SIDECAR, sha256);
         prune(dir, target);
-        Log.info("新版本已下载: " + target + "，下次启动生效");
+        Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
     }
 
     /**
@@ -176,10 +176,10 @@ final class Updater {
                 }
             }
             if (!sha1.isEmpty() && !Downloader.hash(part, "SHA-1").equalsIgnoreCase(sha1)) {
-                throw new IOException("新 jar 的 SHA1 不匹配");
+                throw new IOException(Text.of(Msg.NEW_JAR_SHA1_MISMATCH));
             }
             if (!sha256.isEmpty() && !Downloader.hash(part, "SHA-256").equalsIgnoreCase(sha256)) {
-                throw new IOException("新 jar 的 SHA256 不匹配");
+                throw new IOException(Text.of(Msg.NEW_JAR_SHA256_MISMATCH));
             }
             try {
                 Files.move(part, target, StandardCopyOption.REPLACE_EXISTING,
@@ -293,7 +293,7 @@ final class Updater {
         try {
             url = new URL(text);
         } catch (IOException e) {
-            throw new IOException("非法地址: " + text, e);
+            throw new IOException(Text.of(Msg.INVALID_URL) + text, e);
         }
         URLConnection connection = url.openConnection();
         connection.setConnectTimeout(8000);

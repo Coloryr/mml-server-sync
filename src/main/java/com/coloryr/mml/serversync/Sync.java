@@ -48,12 +48,16 @@ final class Sync {
      * 一句话结果，给进度窗口与日志用
      */
     String run() throws IOException {
-        ui.stage("获取清单");
+        ui.stage(Text.of(Msg.FETCHING_MANIFEST));
         String manifestUrl;
         byte[] data;
         Manifest current;
         try {
             manifestUrl = toUrl(options.manifest);
+            // 先比清单指纹：发布目录里有 server.json.sha1 且没变时，整份清单都不用下
+            if (!options.force && manifestUnchanged(manifestUrl)) {
+                return Text.of(Msg.MANIFEST_UNCHANGED_SKIPPING_SYNC);
+            }
             data = downloader.fetch(manifestUrl);
             current = Manifest.parse(data);
             current.resolveUrls(manifestUrl);
@@ -62,24 +66,24 @@ final class Sync {
             if (!options.lenient) {
                 throw e;
             }
-            Log.error("清单获取失败，跳过本次同步: " + e.getMessage());
-            return "清单获取失败，已跳过同步";
+            Log.error(Text.of(Msg.MANIFEST_FETCH_FAILED_SKIPPING_THIS_SYNC) + e.getMessage());
+            return Text.of(Msg.MANIFEST_FETCH_FAILED_SYNC_SKIPPED);
         }
-        ui.title((current.name.isEmpty() ? "服务器实例" : current.name)
+        ui.title((current.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : current.name)
                 + " · " + packVersionOf(current));
 
         Manifest old = loadOld(current);
         if (old == null) {
-            info("本地无同步记录，远程包版本 " + packVersionOf(current));
+            info(Text.of(Msg.NO_LOCAL_RECORD_VERSION, packVersionOf(current)));
         } else {
-            info("本地包版本 " + packVersionOf(old) + "，远程包版本 " + packVersionOf(current));
+            info(Text.of(Msg.LOCAL_REMOTE_VERSION, packVersionOf(old), packVersionOf(current)));
         }
         if (!options.force && sameVersion(old, current)) {
-            info("包版本未变（" + current.packVersion + "），跳过同步");
-            return "包版本未变，跳过同步";
+            info(Text.of(Msg.PACK_VERSION_UNCHANGED_DETAIL, current.packVersion));
+            return Text.of(Msg.PACK_VERSION_UNCHANGED_SKIPPING_SYNC);
         }
 
-        ui.stage("检查本地文件");
+        ui.stage(Text.of(Msg.CHECKING_LOCAL_FILES));
         validate(current);
         if (old != null) {
             validate(old);
@@ -90,16 +94,16 @@ final class Sync {
         Set<String> skipPaths = new HashSet<>(options.skip);
         List<Manifest.FileEntry> optionalChanges = changedOptional(current, old, previousSkipped);
         if (!options.dryRun && skipPaths.isEmpty() && !optionalChanges.isEmpty() && canAsk()) {
-            ui.stage("等待选择可选模组");
+            ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
             Set<String> unchecked = askOptionalMods(optionalChanges, old);
             if (unchecked == null) {
-                info("已取消同步，未改动任何文件");
-                return "已取消同步";
+                info(Text.of(Msg.SYNC_CANCELLED_NO_FILES_CHANGED));
+                return Text.of(Msg.SYNC_CANCELLED);
             }
             skipPaths.addAll(unchecked);
         }
         if (!skipPaths.isEmpty()) {
-            info("本次跳过 " + skipPaths.size() + " 个可选模组");
+            info(Text.of(Msg.SKIPPING_OPTIONAL_COUNT, skipPaths.size()));
         }
 
         // 删旧文件之前先记下玩家启用着的条目：可选模组换文件名时按它延续启用状态
@@ -112,12 +116,12 @@ final class Sync {
         if (options.dryRun) {
             printOptionalPlan(optionalChanges, skipPaths);
             printPlan(current, old, removedFiles, removedDirs);
-            return "只打印了同步计划，未改动文件";
+            return Text.of(Msg.PLAN_ONLY_NO_FILES_CHANGED);
         }
         if (!options.noDelete) {
             applyRemovals(removedFiles, removedDirs);
         } else {
-            info("--no-delete：跳过 " + removedFiles.size() + " 个文件、" + removedDirs.size() + " 个目录的删除");
+            info(Text.of(Msg.NO_DELETE_SKIPPED, removedFiles.size(), removedDirs.size()));
         }
         cleanKept(previousSkipped, old, current, skipPaths, skippedIdentities);
 
@@ -131,8 +135,7 @@ final class Sync {
             }
         }
         int total = files.size() + archiveCount + (needBase ? 1 : 0);
-        info("需要处理 " + total + " 项（模组/文件 " + files.size() + "，配置压缩包 "
-                + archiveCount + "，基础包 " + (needBase ? 1 : 0) + "）");
+        info(Text.of(Msg.NEED_TO_HANDLE_ITEMS, total, files.size(), archiveCount, needBase ? 1 : 0));
         // 下载一步、解压一步，进度条按两步走
         ui.total(total + archiveCount + (needBase ? 1 : 0));
 
@@ -158,21 +161,21 @@ final class Sync {
             }
             String url = plan.item.url.trim();
             if (url.isEmpty()) {
-                throw new IOException("配置压缩包没有下载地址: " + plan.item.file);
+                throw new IOException(Text.of(Msg.CONFIG_ARCHIVE_HAS_NO_DOWNLOAD_URL) + plan.item.file);
             }
             Path temp = tempDir.resolve("archive-" + (archiveIndex++) + "-" + safeName(plan.item.file));
             tasks.add(new DownloadTask(url, temp, plan.item.sha1, plan.item.sha256, null));
             downloaded.add(new ArchivePlan(plan.item, temp, false));
         }
 
-        ui.stage("下载文件");
+        ui.stage(Text.of(Msg.DOWNLOADING_FILES));
         int done = downloadAll(tasks, total);
 
         if (baseTemp != null) {
-            ui.stage("解压基础包");
+            ui.stage(Text.of(Msg.EXTRACTING_BASE_PACK));
             Fs.extractZip(baseTemp, options.baseDir, true);
             Files.deleteIfExists(baseTemp);
-            info("基础包已解压到 " + options.baseDir);
+            info(Text.of(Msg.BASE_EXTRACTED_TO, options.baseDir));
             ui.step(++done, current.base.file);
         }
 
@@ -184,19 +187,79 @@ final class Sync {
             }
             Fs.extractZip(plan.temp, target, false);
             Files.deleteIfExists(plan.temp);
-            info("解压配置: " + plan.item.dir);
+            info(Text.of(Msg.EXTRACTING_CONFIG_TARGET, plan.item.dir));
             ui.step(++done, plan.item.dir);
         }
 
         saveState(data);
         Skipped.save(options.stateDir, skippedMarkers(current, old, previousSkipped, skipPaths));
-        return "同步完成，当前包版本 " + current.packVersion;
+        return Text.of(Msg.SYNC_COMPLETE_VERSION, current.packVersion);
+    }
+
+    /**
+     * 清单是否没变：先取 `<清单>.sha1`，与本地清单的 SHA1 比
+     *
+     * 发布目录没放 .sha1、取不到、或本地还没有清单时都按"变了"处理，照旧整份下载。
+     * 口径与启动器的 server_pack_update 一致。
+     *
+     * - `manifestUrl`: 清单地址
+     *
+     * # 返回值
+     *
+     * 远端指纹与本地清单一致时返回 true
+     */
+    private boolean manifestUnchanged(String manifestUrl) {
+        if (manifestUrl == null || manifestUrl.isEmpty()) {
+            return false;
+        }
+        String remote = remoteSha1(manifestUrl);
+        if (remote.isEmpty()) {
+            return false;
+        }
+        String local = localManifestSha1();
+        if (local.isEmpty() || !local.equalsIgnoreCase(remote)) {
+            return false;
+        }
+        info(Text.of(Msg.MANIFEST_SHA1_UNCHANGED, remote.substring(0, 8)));
+        return true;
+    }
+
+    /** 取 `<清单>.sha1`，只认纯哈希；取不到或内容不像哈希时返回空串 */
+    private String remoteSha1(String manifestUrl) {
+        try {
+            String text = new String(downloader.fetchQuiet(manifestUrl + ".sha1"),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            int space = text.indexOf(' ');
+            if (space > 0) {
+                // 有些工具会写成 "哈希  文件名"
+                text = text.substring(0, space).trim();
+            }
+            return text.matches("[0-9a-fA-F]{40}") ? text : "";
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /** 本地清单的 SHA1：状态文件优先，其次基础包目录里的 server.json */
+    private String localManifestSha1() {
+        Path state = options.stateDir.resolve("last-manifest.json");
+        Path fallback = options.baseDir.resolve("server.json");
+        for (Path path : new Path[]{state, fallback}) {
+            if (!Files.isRegularFile(path)) {
+                continue;
+            }
+            String hash = Downloader.hash(path, "SHA-1");
+            if (!hash.isEmpty()) {
+                return hash;
+            }
+        }
+        return "";
     }
 
     /** 清单的包版本，空串按「未标注」显示。 */
     private static String packVersionOf(Manifest manifest) {
         String version = manifest.packVersion == null ? "" : manifest.packVersion.trim();
-        return version.isEmpty() ? "未标注" : version;
+        return version.isEmpty() ? Text.of(Msg.NOT_SPECIFIED) : version;
     }
 
     private Manifest loadOld(Manifest current) {
@@ -212,7 +275,7 @@ final class Sync {
                 old.resolveUrls(toUrl(options.manifest));
                 return old;
             } catch (IOException e) {
-                info("忽略无法读取的旧清单 " + path + "：" + e.getMessage());
+                info(Text.of(Msg.IGNORING_OLD_MANIFEST, path, e.getMessage()));
             }
         }
         return null;
@@ -275,13 +338,13 @@ final class Sync {
         for (String path : files) {
             Path target = Fs.resolveSafe(options.gameDir, path);
             Fs.deleteFile(target);
-            info("删除旧文件: " + path);
+            info(Text.of(Msg.REMOVING_OLD_FILE_PATH, path));
         }
         for (String dir : dirs) {
             Path target = Fs.resolveSafe(options.gameDir, dir);
             if (Files.exists(target)) {
                 Fs.deleteDirectory(target);
-                info("删除旧配置目录: " + dir);
+                info(Text.of(Msg.REMOVING_OLD_DIR, dir));
             }
         }
     }
@@ -510,9 +573,9 @@ final class Sync {
                     continue;
                 }
                 Fs.deleteFile(path);
-                info("清理上次跳过的旧文件: " + kept);
+                info(Text.of(Msg.REMOVING_KEPT_FILE, kept));
             } catch (IOException e) {
-                info("清理旧文件失败 " + kept + "：" + e.getMessage());
+                info(Text.of(Msg.FAILED_TO_REMOVE_OLD_FILE, kept, e.getMessage()));
             }
         }
     }
@@ -611,9 +674,9 @@ final class Sync {
 
     /** --dry-run 时把会变的可选模组与跳过项打进计划 */
     private void printOptionalPlan(List<Manifest.FileEntry> optionalChanges, Set<String> skipPaths) {
-        info("会变的可选模组 " + optionalChanges.size() + " 个");
+        info(Text.of(Msg.CHANGED_OPTIONAL_COUNT, optionalChanges.size()));
         for (Manifest.FileEntry item : optionalChanges) {
-            info("  " + (skipPaths.contains(item.path) ? "- 跳过 " : "- 更新 ") + item.path);
+            info("  " + (skipPaths.contains(item.path) ? Text.of(Msg.SKIP) : Text.of(Msg.UPDATE_2)) + item.path);
         }
     }
 
@@ -671,20 +734,19 @@ final class Sync {
 
     private void printPlan(Manifest current, Manifest old, Set<String> removedFiles,
                           List<String> removedDirs) {
-        info("清单: " + (current.name.isEmpty() ? "(未命名)" : current.name)
-                + "，版本 " + current.packVersion);
-        info("将删除旧文件 " + removedFiles.size() + " 个");
+        info(Text.of(Msg.PLAN_MANIFEST,
+                current.name.isEmpty() ? Text.of(Msg.UNNAMED) : current.name, current.packVersion));
+        info(Text.of(Msg.PLAN_REMOVE_FILES, removedFiles.size()));
         for (String path : removedFiles) {
             info("  - " + path);
         }
-        info("将删除旧配置目录 " + removedDirs.size() + " 个");
+        info(Text.of(Msg.PLAN_REMOVE_DIRS, removedDirs.size()));
         for (String dir : removedDirs) {
             info("  - " + dir);
         }
-        info("当前需要检查 " + current.files.size() + " 个文件，"
-                + current.archives.size() + " 个配置压缩包");
+        info(Text.of(Msg.PLAN_CHECK_FILES, current.files.size(), current.archives.size()));
         if (current.base != null && (old == null || old.base == null)) {
-            info("基础包: " + current.base.file);
+            info(Text.of(Msg.PLAN_BASE, current.base.file));
         }
     }
 
@@ -758,10 +820,10 @@ final class Sync {
                     if (cause instanceof IOException) {
                         throw (IOException) cause;
                     }
-                    throw new IOException(cause == null ? "下载失败" : cause.toString(), cause);
+                    throw new IOException(cause == null ? Text.of(Msg.DOWNLOAD_FAILED) : cause.toString(), cause);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new IOException("下载被中断", e);
+                    throw new IOException(Text.of(Msg.DOWNLOAD_INTERRUPTED), e);
                 }
             }
         } finally {

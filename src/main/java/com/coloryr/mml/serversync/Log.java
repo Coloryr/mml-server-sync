@@ -46,7 +46,7 @@ final class Log {
                     StandardOpenOption.WRITE), true);
         } catch (IOException e) {
             file = null;
-            System.err.println(PREFIX + "无法写入日志文件 " + target + "：" + e.getMessage());
+            System.err.println(PREFIX + Text.of(Msg.CANNOT_WRITE_LOG, target, e.getMessage()));
         }
     }
 

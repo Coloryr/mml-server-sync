@@ -21,24 +21,24 @@ public final class Agent {
     public static void premain(String agentArgs, Instrumentation instrumentation) {
         Path gameDir = gameDir();
         if (skipLauncherCheck()) {
-            System.out.println(Log.PREFIX + "MML_SKIP 已设置，跳过 MML 启动器检查");
+            System.out.println(Log.PREFIX + Text.of(Msg.MML_SKIP_IS_SET_SKIPPING_THE_MML_LAUNCHER_CHECK));
         } else if (isMmlLauncher(gameDir)) {
-            System.out.println(Log.PREFIX + "检测到 MML 启动器，跳过服务器包同步");
+            System.out.println(Log.PREFIX + Text.of(Msg.MML_LAUNCHER_DETECTED_SKIPPING_SERVER_PACK_SYNC));
             return;
         }
         String manifest = agentArgs == null ? "" : agentArgs.trim();
         if (manifest.isEmpty()) {
-            throw new RuntimeException("mml-server-sync: -javaagent 参数缺少清单 URL");
+            throw new RuntimeException(Text.of(Msg.MML_SERVER_SYNC_JAVAAGENT_ARGUMENT_IS_MISSING_THE_MANIFEST_URL));
         }
         int code;
         try {
             // 游戏在等 premain 返回，窗口不留、自更新不等
             code = Bootstrap.run(agentArgs(manifest, gameDir), 0, false);
         } catch (Throwable e) {
-            throw new RuntimeException("mml-server-sync 更新失败，已中止游戏启动", e);
+            throw new RuntimeException(Text.of(Msg.MML_SERVER_SYNC_UPDATE_FAILED_GAME_START_ABORTED), e);
         }
         if (code != 0) {
-            throw new RuntimeException("mml-server-sync 更新失败，已中止游戏启动（退出码 " + code + "）");
+            throw new RuntimeException(Text.of(Msg.AGENT_EXIT_CODE, code));
         }
     }
 

@@ -39,31 +39,31 @@ final class Verify {
      */
     static String check(Path jar) {
         if (!Files.isRegularFile(jar)) {
-            return "不是文件";
+            return Text.of(Msg.NOT_A_FILE);
         }
         try {
             if (Files.size(jar) == 0) {
-                return "空文件";
+                return Text.of(Msg.EMPTY_FILE);
             }
         } catch (IOException e) {
-            return "读不到文件大小: " + describe(e);
+            return Text.of(Msg.CANNOT_READ_THE_FILE_SIZE) + describe(e);
         }
 
         try (JarFile file = new JarFile(jar.toFile(), true)) {
             Manifest manifest = file.getManifest();
             if (manifest == null) {
-                return "缺少 MANIFEST.MF";
+                return Text.of(Msg.MISSING_MANIFEST_MF);
             }
             Attributes attributes = manifest.getMainAttributes();
             if (blank(attributes.getValue(Attributes.Name.MAIN_CLASS))) {
-                return "清单缺少 Main-Class";
+                return Text.of(Msg.MANIFEST_IS_MISSING_MAIN_CLASS);
             }
             if (blank(attributes.getValue("Premain-Class"))) {
-                return "清单缺少 Premain-Class";
+                return Text.of(Msg.MANIFEST_IS_MISSING_PREMAIN_CLASS);
             }
             JarEntry entry = file.getJarEntry(ENTRY_CLASS);
             if (entry == null) {
-                return "缺少入口类 " + ENTRY_CLASS;
+                return Text.of(Msg.MISSING_ENTRY_CLASS) + ENTRY_CLASS;
             }
             String version = checkClassVersion(file, entry);
             if (version != null) {
@@ -71,7 +71,7 @@ final class Verify {
             }
             readAll(file);
         } catch (Exception e) {
-            return "无法作为 jar 读取: " + describe(e);
+            return Text.of(Msg.CANNOT_BE_READ_AS_A_JAR) + describe(e);
         }
         return checkHash(jar);
     }
@@ -90,16 +90,16 @@ final class Verify {
             }
         }
         if (read < head.length) {
-            return "入口类不完整";
+            return Text.of(Msg.ENTRY_CLASS_IS_TRUNCATED);
         }
         if ((head[0] & 0xFF) != 0xCA || (head[1] & 0xFF) != 0xFE
                 || (head[2] & 0xFF) != 0xBA || (head[3] & 0xFF) != 0xBE) {
-            return "入口类不是 class 文件";
+            return Text.of(Msg.ENTRY_CLASS_IS_NOT_A_CLASS_FILE);
         }
         int major = ((head[6] & 0xFF) << 8) | (head[7] & 0xFF);
         int running = runningClassVersion();
         if (running > 0 && major > running) {
-            return "入口类需要更新的 Java（class " + major + "，当前 " + running + "）";
+            return Text.of(Msg.ENTRY_CLASS_NEEDS_JAVA, major, running);
         }
         return null;
     }
@@ -125,11 +125,11 @@ final class Verify {
     private static String checkHash(Path jar) {
         String sha256 = sidecar(jar, SHA256_SIDECAR);
         if (!sha256.isEmpty() && !Downloader.hash(jar, "SHA-256").equalsIgnoreCase(sha256)) {
-            return "SHA256 与下载时记录的不一致";
+            return Text.of(Msg.SHA256_DOES_NOT_MATCH_THE_RECORDED_VALUE);
         }
         String sha1 = sidecar(jar, SHA1_SIDECAR);
         if (!sha1.isEmpty() && !Downloader.hash(jar, "SHA-1").equalsIgnoreCase(sha1)) {
-            return "SHA1 与下载时记录的不一致";
+            return Text.of(Msg.SHA1_DOES_NOT_MATCH_THE_RECORDED_VALUE);
         }
         return null;
     }

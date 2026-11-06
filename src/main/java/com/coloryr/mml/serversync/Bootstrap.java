@@ -109,16 +109,16 @@ final class Bootstrap {
         try (UpdateClassLoader loader = new UpdateClassLoader(jar.toUri().toURL())) {
             Class<?> entry = Class.forName(ENTRY, true, loader);
             Method method = entry.getMethod("run", String[].class, Progress.class);
-            Log.info("使用更新包 " + jar.getFileName() + "（当前 " + Main.VERSION + "）");
+            Log.info(Text.of(Msg.USING_UPDATE_PACKAGE_VERSION, jar.getFileName(), Main.VERSION));
             Object result = method.invoke(null, args, progress);
             return result instanceof Integer ? (Integer) result : 1;
         } catch (InvocationTargetException e) {
             // 更新包自己跑挂了：不再拿当前版本重跑一遍，同一套操作不能做两次
             Throwable cause = e.getCause() == null ? e : e.getCause();
-            System.out.println(Log.PREFIX + "更新包执行失败: " + describe(cause));
+            System.out.println(Log.PREFIX + Text.of(Msg.UPDATE_PACKAGE_FAILED) + describe(cause));
             return 1;
         } catch (Throwable e) {
-            System.out.println(Log.PREFIX + "更新包不可用，回退当前版本: " + describe(e));
+            System.out.println(Log.PREFIX + Text.of(Msg.UPDATE_PACKAGE_UNUSABLE_FALLING_BACK_TO_THE_CURRENT_VERSION) + describe(e));
             deleteUpdate(jar);
             return null;
         }
@@ -147,7 +147,7 @@ final class Bootstrap {
                 candidates.add(file);
             }
         } catch (Exception e) {
-            System.out.println(Log.PREFIX + "读取更新目录失败: " + describe(e));
+            System.out.println(Log.PREFIX + Text.of(Msg.FAILED_TO_READ_THE_UPDATE_DIRECTORY) + describe(e));
             return null;
         }
         // 版本从高到低试：最新的那份校验不过，还能退到上一份
@@ -159,7 +159,7 @@ final class Bootstrap {
             if (reason == null) {
                 return file;
             }
-            System.out.println(Log.PREFIX + "更新包校验不通过，跳过 " + file.getFileName() + "：" + reason);
+            System.out.println(Log.PREFIX + Text.of(Msg.UPDATE_PACKAGE_INVALID, file.getFileName(), reason));
             deleteUpdate(file);
         }
         return null;

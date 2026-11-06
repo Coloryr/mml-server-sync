@@ -38,10 +38,10 @@ final class Downloader {
             return item.url;
         }
         if (item.custom) {
-            throw new IOException("自定义条目没有下载地址: " + item.path);
+            throw new IOException(Text.of(Msg.CUSTOM_ENTRY_HAS_NO_DOWNLOAD_URL) + item.path);
         }
         if (item.fid.isEmpty()) {
-            throw new IOException("条目既没有 Url 也没有 FileId: " + item.path);
+            throw new IOException(Text.of(Msg.ENTRY_HAS_NEITHER_URL_NOR_FILEID) + item.path);
         }
         String cached = resolved.get(item.fid);
         if (cached != null) {
@@ -50,7 +50,7 @@ final class Downloader {
         String url = isCurseForge(item.pid, item.fid)
                 ? resolveCurseForge(item) : resolveModrinth(item.fid);
         if (url.isEmpty()) {
-            throw new IOException("解析不到下载地址: " + item.path);
+            throw new IOException(Text.of(Msg.CANNOT_RESOLVE_THE_DOWNLOAD_URL) + item.path);
         }
         resolved.put(item.fid, url);
         return url;
@@ -88,7 +88,7 @@ final class Downloader {
         try {
             id = Long.parseLong(item.fid);
         } catch (NumberFormatException e) {
-            throw new IOException("CurseForge FileId 不是数字: " + item.fid);
+            throw new IOException(Text.of(Msg.CURSEFORGE_FILEID_IS_NOT_A_NUMBER) + item.fid);
         }
         String name = item.fileName();
         try {
@@ -127,7 +127,7 @@ final class Downloader {
     /** 下载并校验；本地文件已匹配时直接跳过。返回是否真的下载了。 */
     boolean download(String url, Path target, String sha1, String sha256) throws IOException {
         if (url == null || url.trim().isEmpty()) {
-            throw new IOException("下载地址为空: " + target);
+            throw new IOException(Text.of(Msg.DOWNLOAD_URL_IS_EMPTY) + target);
         }
         if (Files.isRegularFile(target) && matches(target, sha1, sha256)) {
             if (!quiet) {
@@ -168,10 +168,10 @@ final class Downloader {
                 }
             }
             if (!sha1.isEmpty() && !hex(sha1Digest.digest()).equalsIgnoreCase(sha1)) {
-                throw new IOException("SHA1 不匹配: " + target);
+                throw new IOException(Text.of(Msg.SHA1_MISMATCH) + target);
             }
             if (!sha256.isEmpty() && !hex(sha256Digest.digest()).equalsIgnoreCase(sha256)) {
-                throw new IOException("SHA256 不匹配: " + target);
+                throw new IOException(Text.of(Msg.SHA256_MISMATCH) + target);
             }
             try {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -213,9 +213,33 @@ final class Downloader {
         return fetch(url, Collections.<String, String>emptyMap());
     }
 
+    /**
+     * 取一份小文件，不打印"获取 JSON"日志
+     *
+     * 用于清单指纹这类每次启动都会探一次的地址。
+     *
+     * - `url`: 地址
+     *
+     * # 返回值
+     *
+     * 响应体内容；取不到时抛 IOException
+     */
+    byte[] fetchQuiet(String url) throws IOException {
+        URLConnection connection = open(url, Collections.<String, String>emptyMap());
+        try (InputStream input = connection.getInputStream()) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                out.write(buffer, 0, read);
+            }
+            return out.toByteArray();
+        }
+    }
+
     byte[] fetch(String url, Map<String, String> headers) throws IOException {
         if (!quiet) {
-            Log.info("获取 JSON: " + url);
+            Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
         URLConnection connection = open(url, headers);
         try (InputStream input = connection.getInputStream()) {
@@ -226,7 +250,7 @@ final class Downloader {
                 out.write(buffer, 0, read);
             }
             if (!quiet) {
-                Log.info("JSON 已获取，共 " + out.size() + " 字节: " + url);
+                Log.info(Text.of(Msg.DOWNLOADER_JSON_FETCHED, out.size(), url));
             }
             return out.toByteArray();
         }
@@ -237,7 +261,7 @@ final class Downloader {
         try {
             url = new URL(text);
         } catch (IOException e) {
-            throw new IOException("非法下载地址: " + text, e);
+            throw new IOException(Text.of(Msg.INVALID_DOWNLOAD_URL) + text, e);
         }
         URLConnection connection = url.openConnection();
         connection.setConnectTimeout(20000);

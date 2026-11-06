@@ -96,18 +96,18 @@ final class OptionalModsDialog {
             SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows));
         } catch (Exception e) {
             // 弹不出来别拦住同步：按全部更新处理
-            Log.error("可选模组勾选窗打开失败: " + e.getMessage());
+            Log.error(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG) + e.getMessage());
             return new LinkedHashSet<>();
         }
         return result[0];
     }
 
     private static Set<String> show(Component parent, List<Row> rows) {
-        final JDialog dialog = new JDialog(ownerOf(parent), "可选模组更新", true);
+        final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MOD_UPDATES), true);
         dialog.setMinimumSize(new Dimension(680, 360));
 
         final DefaultTableModel model = new DefaultTableModel(
-                new Object[]{"更新", "模组", "路径", "本地状态"}, 0) {
+                new Object[]{Text.of(Msg.UPDATE), Text.of(Msg.MOD), Text.of(Msg.PATH), Text.of(Msg.LOCAL_STATE)}, 0) {
             private static final long serialVersionUID = 1L;
 
             @Override
@@ -176,10 +176,10 @@ final class OptionalModsDialog {
         scroll.setBorder(BorderFactory.createLineBorder(new Color(0xDD, 0xE0, 0xE4)));
         scroll.getViewport().setBackground(table.getBackground());
 
-        final JCheckBox all = new JCheckBox("全选", true);
+        final JCheckBox all = new JCheckBox(Text.of(Msg.SELECT_ALL), true);
         final JLabel count = new JLabel();
-        final JButton cancel = new JButton("取消同步");
-        final JButton ok = new JButton("更新所选");
+        final JButton cancel = new JButton(Text.of(Msg.CANCEL_SYNC));
+        final JButton ok = new JButton(Text.of(Msg.UPDATE_SELECTED));
         final Set<String> unchecked = new LinkedHashSet<>();
         final boolean[] cancelled = {false};
 
@@ -190,8 +190,8 @@ final class OptionalModsDialog {
                     checked++;
                 }
             }
-            count.setText("已选 " + checked + " / " + model.getRowCount());
-            ok.setText("更新所选（" + checked + "）");
+            count.setText(Text.of(Msg.SELECTED_COUNT, checked, model.getRowCount()));
+            ok.setText(Text.of(Msg.UPDATE_SELECTED_COUNT, checked));
             all.setSelected(checked == model.getRowCount());
         };
         model.addTableModelListener(event -> refresh.run());
@@ -220,9 +220,9 @@ final class OptionalModsDialog {
             dialog.dispose();
         }, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
 
-        JLabel title = new JLabel("本次有 " + rows.size() + " 个可选模组会更新");
+        JLabel title = new JLabel(Text.of(Msg.DIALOG_HEADER, rows.size()));
         title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
-        JLabel hint = new JLabel("取消勾选的保持本地旧版本；发布方不换内容就不再询问。");
+        JLabel hint = new JLabel(Text.of(Msg.UNCHECKED_MODS_KEEP_THE_OLDER_LOCAL_VERSION_THE_PUBLISHER_WILL_NOT_ASK_AGAIN_UNTIL_THE_CONTENT_CHANGES));
         hint.setFont(hint.getFont().deriveFont(Font.PLAIN, 11f));
         hint.setForeground(new Color(0x70, 0x76, 0x7D));
         JPanel head = new JPanel(new BorderLayout(0, 4));
@@ -272,11 +272,11 @@ final class OptionalModsDialog {
 
     private static String stateText(Row row) {
         if (row.added) {
-            return "新增";
+            return Text.of(Msg.ADDED);
         }
-        StringBuilder out = new StringBuilder(row.enabled ? "已启用" : "已禁用");
+        StringBuilder out = new StringBuilder(row.enabled ? Text.of(Msg.ENABLED) : Text.of(Msg.DISABLED));
         if (!row.oldName.isEmpty()) {
-            out.append("，本地为 ").append(row.oldName);
+            out.append(Text.of(Msg.DIALOG_LOCAL_FILE, row.oldName));
         }
         return out.toString();
     }
@@ -328,10 +328,10 @@ final class OptionalModsDialog {
     private static Color foregroundOf(int column, Object value) {
         String text = value == null ? "" : value.toString();
         if (column == 3) {
-            if (text.startsWith("新增")) {
+            if (text.startsWith(Text.of(Msg.ADDED))) {
                 return ADDED;
             }
-            if (text.startsWith("已禁用")) {
+            if (text.startsWith(Text.of(Msg.DISABLED))) {
                 return DISABLED;
             }
         }

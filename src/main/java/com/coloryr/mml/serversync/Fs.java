@@ -24,10 +24,10 @@ final class Fs {
     static Path normalizeRelative(String raw) throws IOException {
         String value = raw == null ? "" : raw.trim().replace('\\', '/');
         if (value.isEmpty()) {
-            throw new IOException("清单里有空路径");
+            throw new IOException(Text.of(Msg.THE_MANIFEST_CONTAINS_AN_EMPTY_PATH));
         }
         if (value.startsWith("/") || value.matches("^[A-Za-z]:.*")) {
-            throw new IOException("清单路径不能是绝对路径: " + raw);
+            throw new IOException(Text.of(Msg.MANIFEST_PATH_MUST_NOT_BE_ABSOLUTE) + raw);
         }
         List<String> parts = new ArrayList<>();
         for (String part : value.split("/", -1)) {
@@ -35,12 +35,12 @@ final class Fs {
                 continue;
             }
             if ("..".equals(part)) {
-                throw new IOException("清单路径不能包含 ..: " + raw);
+                throw new IOException(Text.of(Msg.MANIFEST_PATH_MUST_NOT_CONTAIN) + raw);
             }
             parts.add(part);
         }
         if (parts.isEmpty()) {
-            throw new IOException("清单路径为空: " + raw);
+            throw new IOException(Text.of(Msg.MANIFEST_PATH_IS_EMPTY) + raw);
         }
         Path out = null;
         for (String part : parts) {
@@ -54,7 +54,7 @@ final class Fs {
         Path rel = normalizeRelative(raw);
         Path target = base.resolve(rel).normalize();
         if (!target.startsWith(base) || target.equals(base)) {
-            throw new IOException("路径越界: " + raw);
+            throw new IOException(Text.of(Msg.PATH_ESCAPES_THE_TARGET_DIRECTORY) + raw);
         }
         return target;
     }
@@ -89,7 +89,7 @@ final class Fs {
 
     static void extractZip(Path zip, Path target, boolean base) throws IOException {
         if (!zip.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
-            throw new IOException("只支持 zip 压缩包: " + zip);
+            throw new IOException(Text.of(Msg.ONLY_ZIP_ARCHIVES_ARE_SUPPORTED) + zip);
         }
         List<ZipEntry> entries = new ArrayList<>();
         try (ZipFile file = new ZipFile(zip.toFile(), java.nio.charset.StandardCharsets.UTF_8)) {
@@ -138,14 +138,14 @@ final class Fs {
         if (first.equals("game.json") || first.equals("icon.png")
                 || first.equals("server.json") || first.equals("server.json.sha1")
                 || first.equals("server.json.old") || first.equals("server_instance_ids.json")) {
-            throw new IOException("基础包不能覆盖启动器元数据: " + raw);
+            throw new IOException(Text.of(Msg.THE_BASE_PACK_MUST_NOT_OVERWRITE_LAUNCHER_METADATA) + raw);
         }
         if (first.equals(".minecraft") && parts.length > 1) {
             String second = parts[1].toLowerCase(Locale.ROOT);
             if (second.equals("server.json") || second.equals("server.json.sha1")
                     || second.equals("server.json.old")
                     || second.equals("server_instance_ids.json")) {
-                throw new IOException("基础包不能覆盖服务器清单: " + raw);
+                throw new IOException(Text.of(Msg.THE_BASE_PACK_MUST_NOT_OVERWRITE_THE_SERVER_MANIFEST) + raw);
             }
         }
     }
