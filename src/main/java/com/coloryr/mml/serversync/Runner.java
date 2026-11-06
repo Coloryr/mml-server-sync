@@ -12,7 +12,8 @@ import com.coloryr.mml.serversync.host.Progress;
  *
  * 自更新会把 update 目录里的新 jar 用独立类加载器装进来，再反射调用 {@link #run}：
  * 这个类的全名与方法签名要跨版本保持不变，每个版本的 jar 里都带一份。
- * 它只做同步，不查更新、不建窗口、也绝不调用 System.exit。
+ * 它只做同步、不查更新、也绝不调用 System.exit；进度窗口在宿主没给的时候自己建，
+ * 否则从更新包运行时界面会一直停在基包那一版的布局。
  */
 public final class Runner {
     private Runner() {}
@@ -21,7 +22,7 @@ public final class Runner {
      * 按命令行参数跑一次同步
      *
      * - `args`: 命令行参数
-     * - `progress`: 进度窗口；没有窗口时传 null
+     * - `progress`: 进度窗口；没有窗口时传 null 或 {@link Progress#NONE}
      *
      * # 返回值
      *
@@ -39,6 +40,7 @@ public final class Runner {
                 System.out.println("mml-server-sync " + Main.VERSION);
                 return 0;
             }
+            ui = adopt(progress, options);
             if (options.manifest == null || options.manifest.trim().isEmpty()) {
                 throw new UsageException(Text.of(Msg.MISSING_MANIFEST_URL_OR_FILE));
             }
@@ -91,6 +93,55 @@ public final class Runner {
         } catch (Exception e) {
             System.err.println(Log.PREFIX + Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
             return 1;
+        }
+    }
+
+    /**
+     * 取本次运行真正使用的进度窗口：宿主传来的不是本包这一份时，换成自己建的。
+     *
+     * 从 update/ 包运行时窗口由宿主（基包）创建，而基包不随更新包变化，界面布局会
+     * 一直停在基包那一版；同步逻辑在更新包里，界面也必须由最新的代码画。
+     *
+     * - `given`: 宿主传来的窗口，可能是空实现
+     * - `options`: 本次运行的选项，用来判断要不要窗口
+     *
+     * # 返回值
+     *
+     * 实际使用的窗口；不需要窗口时原样返回 `given`
+     */
+    private static Progress adopt(Progress given, Options options) {
+        Progress current = given == null ? Progress.NONE : given;
+        if (current instanceof ProgressWindow) {
+            return current;
+        }
+        if (!options.gui || java.awt.GraphicsEnvironment.isHeadless()) {
+            return current;
+        }
+        Progress own = ProgressWindow.open(true, lingerMillis());
+        if (own == Progress.NONE) {
+            return current;
+        }
+        if (current != Progress.NONE) {
+            // 宿主那一版的窗口先收掉，别和新窗口叠在一起
+            try {
+                current.finish(true, "");
+            } catch (Throwable ignored) {
+                // 关不掉不影响新窗口
+            }
+        }
+        return own;
+    }
+
+    /** 窗口结束后停留多久：宿主经系统属性传过来，没传时按游戏模式处理（不停留） */
+    private static int lingerMillis() {
+        String value = System.getProperty(Bootstrap.LINGER_KEY, "").trim();
+        if (value.isEmpty()) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(value));
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
