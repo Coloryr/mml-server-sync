@@ -76,6 +76,8 @@ final class ProgressWindow implements Progress {
         stageLabel = new JLabel(Text.of(Msg.PREPARING));
         detailLabel = new JLabel(" ");
         detailLabel.setFont(detailLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        // 固定首选宽度：文件名长短不能挤压按钮区（超宽的 WEST 会把 EAST 挤变形）
+        detailLabel.setPreferredSize(new Dimension(250, 18));
 
         bar = new JProgressBar(0, 100);
         bar.setStringPainted(true);
