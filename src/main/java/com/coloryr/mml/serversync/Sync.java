@@ -26,8 +26,6 @@ final class Sync {
     private static final String DISABLED_SUFFIX = ".disabled";
     /** 旧版禁用后缀，读取时仍认 */
     private static final String LEGACY_DISABLE_SUFFIX = ".disable";
-    /** 进度窗取消时写的系统属性，值：skip / end */
-    private static final String CANCEL_KEY = "mml.serverSync.cancel";
 
     private final Options options;
     private final Downloader downloader;
@@ -271,13 +269,7 @@ final class Sync {
      * 系统属性由进度窗写：skip 跳过本次更新（退出码 0），end 结束游戏（退出码 1）。
      */
     private static void checkCancelled() {
-        String state = System.getProperty(CANCEL_KEY, "");
-        if ("end".equalsIgnoreCase(state)) {
-            throw new SyncAbortException(Text.of(Msg.CANCEL_AFTER_ENDED));
-        }
-        if ("skip".equalsIgnoreCase(state)) {
-            throw new CancelledException(Text.of(Msg.UPDATE_CANCELLED_MIDWAY));
-        }
+        Cancels.check();
     }
 
     /** 清单的包版本，空串按「未标注」显示。 */

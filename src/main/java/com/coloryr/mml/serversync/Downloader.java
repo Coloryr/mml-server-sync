@@ -150,6 +150,7 @@ final class Downloader {
                  OutputStream output = Files.newOutputStream(temp)) {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
+                long lastCancelCheck = 0;
                 while ((read = input.read(buffer)) >= 0) {
                     output.write(buffer, 0, read);
                     if (!sha1.isEmpty()) {
@@ -159,6 +160,11 @@ final class Downloader {
                         sha256Digest.update(buffer, 0, read);
                     }
                     done += read;
+                    // 大文件下到一半也要能停：每 1MB 看一眼取消状态
+                    if (done - lastCancelCheck >= 1048576L) {
+                        lastCancelCheck = done;
+                        Cancels.check();
+                    }
                     long now = System.nanoTime();
                     if (!quiet && now - lastTime >= REPORT_INTERVAL) {
                         report(target, done, total, done - lastDone, now - lastTime);

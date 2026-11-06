@@ -108,6 +108,7 @@ final class Fs {
                 }
             }
             for (ZipEntry entry : entries) {
+                Cancels.check();
                 String name = entry.getName();
                 if (name == null || name.trim().isEmpty()) {
                     continue;
