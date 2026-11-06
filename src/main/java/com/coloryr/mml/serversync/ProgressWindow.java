@@ -3,6 +3,7 @@ package com.coloryr.mml.serversync;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -88,14 +89,17 @@ final class ProgressWindow implements Progress {
 
         cancelButton = new JButton(Text.of(Msg.CANCEL_UPDATE));
         cancelButton.addActionListener(event -> requestCancel());
-        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先置灰
+        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先置灰。
+        // 与取消更新同尺寸并排放置（FlowLayout 自然尺寸），不横向拉伸
         optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
         optionalButton.setEnabled(false);
         optionalButton.addActionListener(event -> requestOptionalManage());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.add(optionalButton);
+        buttons.add(cancelButton);
         JPanel south = new JPanel(new BorderLayout());
         south.add(detailLabel, BorderLayout.WEST);
-        south.add(optionalButton, BorderLayout.CENTER);
-        south.add(cancelButton, BorderLayout.EAST);
+        south.add(buttons, BorderLayout.EAST);
 
         JPanel root = new JPanel(new BorderLayout(0, 8));
         root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
