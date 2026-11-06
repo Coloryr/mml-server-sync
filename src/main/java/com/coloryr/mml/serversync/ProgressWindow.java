@@ -45,8 +45,8 @@ final class ProgressWindow implements Progress {
     private final JButton optionalButton;
     /** 已经点过取消，别重复问 */
     private boolean cancelRequested;
-    /** 用户点了「自选模组」，等同步线程到安全点处理 */
-    private volatile boolean optionalRequested;
+    /** 「自选模组」点击回调，由同步流程安装；弹窗在回调里打开，阻塞在本回调直到玩家确认 */
+    private volatile Runnable optionalHandler;
     /** 结束之后不再更新界面 */
     private final AtomicBoolean finished = new AtomicBoolean();
     /** 结束后窗口停留的时间，单位毫秒；0 表示立刻关掉 */
@@ -88,9 +88,9 @@ final class ProgressWindow implements Progress {
 
         cancelButton = new JButton(Text.of(Msg.CANCEL_UPDATE));
         cancelButton.addActionListener(event -> requestCancel());
-        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先隐藏
+        // 自选模组入口常驻进度窗；清单就绪前没有数据可管，先置灰
         optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
-        optionalButton.setVisible(false);
+        optionalButton.setEnabled(false);
         optionalButton.addActionListener(event -> requestOptionalManage());
         JPanel south = new JPanel(new BorderLayout());
         south.add(detailLabel, BorderLayout.WEST);
@@ -160,47 +160,33 @@ final class ProgressWindow implements Progress {
         dispose();
     }
 
-    /** 显示「自选模组」按钮，等用户点 */
-    void showOptionalModsButton() {
-        update(() -> optionalButton.setVisible(true));
+    /** 安装「自选模组」点击回调；回调在事件线程上执行，弹窗在回调里打开 */
+    void setOptionalHandler(Runnable handler) {
+        optionalHandler = handler;
     }
 
-    /** 收起「自选模组」按钮：下载计划定稿后不再接受改动 */
-    void hideOptionalModsButton() {
-        optionalRequested = false;
+    /** 清单解析完成、可以管理自选模组时恢复按钮可点 */
+    void enableOptionalModsButton() {
         update(() -> {
-            optionalButton.setVisible(false);
-            optionalButton.setEnabled(true);
+            if (!finished.get()) {
+                optionalButton.setEnabled(true);
+            }
         });
     }
 
-    /** 处理完一次管理请求后恢复按钮，用户还可以在下载开始前再改一次 */
-    void rearmOptionalModsButton() {
-        update(() -> optionalButton.setEnabled(true));
-    }
-
-    /**
-     * 用户是否点了「自选模组」；取走即清零，按钮保持置灰到处理完
-     *
-     * # 返回值
-     *
-     * 有未处理的请求时返回 true
-     */
-    boolean consumeOptionalRequest() {
-        if (!optionalRequested) {
-            return false;
-        }
-        optionalRequested = false;
-        return true;
-    }
-
-    /** 用户点了「自选模组」：记下请求，由同步线程在安全点弹窗 */
+    /** 用户点了「自选模组」：交给回调打开弹窗；弹窗期间按钮置灰 */
     private void requestOptionalManage() {
-        if (finished.get() || optionalRequested) {
+        if (finished.get() || optionalHandler == null) {
             return;
         }
-        optionalRequested = true;
         optionalButton.setEnabled(false);
+        try {
+            optionalHandler.run();
+        } finally {
+            if (!finished.get()) {
+                optionalButton.setEnabled(true);
+            }
+        }
     }
 
     @Override
