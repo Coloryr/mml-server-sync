@@ -106,10 +106,14 @@ final class Sync {
         ui.title((current.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : current.name)
                 + " · " + packVersionOf(current));
 
-        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装
-        if (canAsk()) {
+        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
+        // 按钮接线依赖具体窗口类：从 update/ 包运行时类加载器分裂，
+        // instanceof 不成立，按钮在过渡期保持置灰，弹窗本身不受影响。
+        if (hasButtonUi()) {
             ((ProgressWindow) ui).setOptionalHandler(this::openManageDialog);
             ((ProgressWindow) ui).enableOptionalModsButton();
+        }
+        if (canAsk()) {
             optionalNotes = fetchOptionalNotes(manifestUrl);
         }
 
@@ -356,7 +360,7 @@ final class Sync {
         if (!pendingDialog.compareAndSet(null, pending)) {
             return;
         }
-        javax.swing.JFrame parent = ((ProgressWindow) ui).frame();
+        javax.swing.JFrame parent = ownerFrame();
         javax.swing.SwingUtilities.invokeLater(() -> {
             try {
                 Set<String> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
@@ -686,10 +690,24 @@ final class Sync {
         }
     }
 
-    /** 有界面、允许交互、也真的弹得出来时才弹窗 */
+    /** 有界面、允许交互时才弹窗；不要求具体窗口类型（从 update/ 包运行时类加载器分裂，instanceof 不可用） */
     private boolean canAsk() {
-        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless()
-                && ui instanceof ProgressWindow;
+        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless();
+    }
+
+    /** 按钮接线是否可用：弹窗之外还需要能拿到具体窗口类（不经 update/ 运行时才成立） */
+    private boolean hasButtonUi() {
+        return canAsk() && ui instanceof ProgressWindow;
+    }
+
+    /** 找正在显示的进度窗当弹窗父窗口；没有时返回 null，对话框居屏幕中 */
+    private static javax.swing.JFrame ownerFrame() {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            if (window instanceof javax.swing.JFrame && window.isShowing()) {
+                return (javax.swing.JFrame) window;
+            }
+        }
+        return null;
     }
 
     private Path existingVariantQuiet(String path) {
