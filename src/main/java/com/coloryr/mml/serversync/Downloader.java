@@ -220,6 +220,11 @@ final class Downloader {
         return fetch(url, Collections.<String, String>emptyMap());
     }
 
+    /** 清单下载进度回调：约每秒通知一次，与 [manifest] 日志同节奏 */
+    interface FetchListener {
+        void progress(long done, long total);
+    }
+
     /**
      * 取一份小文件，不打印"获取 JSON"日志
      *
@@ -245,10 +250,24 @@ final class Downloader {
     }
 
     byte[] fetch(String url, Map<String, String> headers) throws IOException {
+        return fetch(url, headers, null);
+    }
+
+    /**
+     * 取一份远程文件并读入内存，清单类请求会协商 gzip
+     *
+     * - `url`: 地址
+     * - `headers`: 附加请求头
+     * - `listener`: 下载进度回调，可为 null；约每秒一次
+     */
+    byte[] fetch(String url, Map<String, String> headers, FetchListener listener) throws IOException {
+        final Map<String, String> safe = headers == null
+                ? Collections.<String, String>emptyMap() : headers;
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
-        URLConnection connection = open(url, headers, true);
+        URLConnection connection = open(url, safe, true);
+        long total = connection.getContentLengthLong();
         try (InputStream input = body(connection)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[16 * 1024];
@@ -265,8 +284,13 @@ final class Downloader {
                     Cancels.check();
                 }
                 long now = System.nanoTime();
-                if (!quiet && now - lastTime >= REPORT_INTERVAL) {
-                    reportManifest(done, done - lastDone, now - lastTime);
+                if (now - lastTime >= REPORT_INTERVAL) {
+                    if (!quiet) {
+                        reportManifest(done, done - lastDone, now - lastTime);
+                    }
+                    if (listener != null) {
+                        listener.progress(done, total);
+                    }
                     lastDone = done;
                     lastTime = now;
                 }

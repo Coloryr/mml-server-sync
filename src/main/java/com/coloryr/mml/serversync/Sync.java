@@ -48,7 +48,7 @@ final class Sync {
      * 一句话结果，给进度窗口与日志用
      */
     String run() throws IOException {
-        ui.stage(Text.of(Msg.FETCHING_MANIFEST));
+        ui.stage(Text.of(Msg.FETCHING_MANIFEST_FINGERPRINT));
         String manifestUrl;
         byte[] data;
         Manifest current;
@@ -58,7 +58,12 @@ final class Sync {
             if (!options.force && manifestUnchanged(manifestUrl)) {
                 return Text.of(Msg.MANIFEST_UNCHANGED_SKIPPING_SYNC);
             }
-            data = downloader.fetch(manifestUrl);
+            ui.stage(Text.of(Msg.DOWNLOADING_MANIFEST));
+            // 清单可能要下几十秒：进度条转不确定状态，接收进度回传到窗口
+            ui.total(0);
+            data = downloader.fetch(manifestUrl, null, (done, total) -> ui.step(0, total > 0
+                    ? Text.of(Msg.MANIFEST_PROGRESS_TOTAL, mb(done), mb(total))
+                    : Text.of(Msg.MANIFEST_PROGRESS, mb(done))));
             current = Manifest.parse(data);
             current.resolveUrls(manifestUrl);
         } catch (IOException e) {
@@ -88,6 +93,7 @@ final class Sync {
         if (old != null) {
             validate(old);
         }
+        ui.stage(Text.of(Msg.COMPARING_CHANGES));
 
         // 上次跳过的可选模组：这次发布方没换内容就不再问
         List<Skipped.Entry> previousSkipped = Skipped.load(options.stateDir);
@@ -122,6 +128,7 @@ final class Sync {
             return Text.of(Msg.PLAN_ONLY_NO_FILES_CHANGED);
         }
         checkCancelled();
+        ui.stage(Text.of(Msg.CLEANING_OLD_FILES));
         if (!options.noDelete) {
             applyRemovals(removedFiles, removedDirs);
         } else {
@@ -185,6 +192,9 @@ final class Sync {
         }
 
         downloaded.sort(Comparator.comparingInt((ArchivePlan plan) -> depth(plan.item.dir)));
+        if (!downloaded.isEmpty()) {
+            ui.stage(Text.of(Msg.EXTRACTING_ARCHIVES));
+        }
         for (ArchivePlan plan : downloaded) {
             checkCancelled();
             Path target = Fs.resolveSafe(options.gameDir, plan.item.dir);
@@ -198,6 +208,7 @@ final class Sync {
         }
 
         checkCancelled();
+        ui.stage(Text.of(Msg.SAVING_STATE));
         saveState(data);
         Skipped.save(options.stateDir, skippedMarkers(current, old, previousSkipped, skipPaths));
         return Text.of(Msg.SYNC_COMPLETE_VERSION, current.packVersion);
@@ -783,7 +794,14 @@ final class Sync {
         if (!options.quiet && total > 0) {
             Log.info("[progress] " + done + "/" + total);
         }
+        // 阶段带整体计数，细节行留给出当前文件名
+        ui.stage(Text.of(Msg.DOWNLOADING_FILES_PROGRESS, done, total));
         ui.step(done, detail);
+    }
+
+    /** 字节数的 MB 显示，与日志里的进度格式一致 */
+    private static String mb(long bytes) {
+        return String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
     }
 
     private void info(String message) {
