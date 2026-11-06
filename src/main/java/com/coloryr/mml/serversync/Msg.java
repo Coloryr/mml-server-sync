@@ -188,7 +188,16 @@ enum Msg {
     UPDATER_NEW_VERSION("发现新版本 %s（当前 %s），开始下载", "New version found: %s (current %s), downloading"),
     UPDATER_DOWNLOADED("新版本已下载: %s，下次启动生效", "New version downloaded: %s, effective on next start"),
     DOWNLOADER_JSON_FETCHED("JSON 已获取，共 %s 字节: %s", "JSON fetched, %s bytes: %s"),
-    LANGUAGE_NOTE("  - 语言跟系统语言；-Dmml.serverSync.lang=zh|en 可覆盖。", "  - Language follows the system locale; override with -Dmml.serverSync.lang=zh|en");
+    LANGUAGE_NOTE("  - 语言跟系统语言；-Dmml.serverSync.lang=zh|en 可覆盖。", "  - Language follows the system locale; override with -Dmml.serverSync.lang=zh|en"),
+    CANCEL_AFTER_END("结束游戏", "End game"),
+    CANCEL_AFTER_ENDED("已按用户要求结束游戏", "Game ended by user request"),
+    CANCEL_UPDATE("取消更新", "Cancel update"),
+    CANCELLING("正在取消…", "Cancelling..."),
+    CANCEL_DIALOG_TITLE("取消更新", "Cancel update"),
+    CANCEL_DIALOG_QUESTION("要跳过本次更新直接启动游戏，还是结束游戏？", "Skip this update and start the game, or end the game?"),
+    CANCEL_DIALOG_SKIP("跳过更新", "Skip update"),
+    UPDATE_CANCELLED_MIDWAY("更新已取消，可能有文件已写入；下次启动会补齐", "Update cancelled; some files may have been written. The next launch will finish it."),
+    FAILED_TO_OPEN_THE_CANCEL_DIALOG("取消确认框打开失败: %s", "Failed to open the cancel dialog: %s");
 
     private final String zh;
     private final String en;

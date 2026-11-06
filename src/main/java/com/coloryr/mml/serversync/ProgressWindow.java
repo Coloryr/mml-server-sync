@@ -6,8 +6,11 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.BorderFactory;
+import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -20,9 +23,9 @@ import com.coloryr.mml.serversync.host.Progress;
 /**
  * 同步进度窗口。
  *
- * 同步经常跑在游戏进程的 premain 里：窗口要在游戏启动前出现、同步一结束就消失，
- * 所以只做一件事——把主流程推来的阶段与步骤画出来，不提供取消按钮，避免和
- * 「下载到一半的游戏目录」这种状态纠缠。
+ * 同步经常跑在游戏进程的 premain 里：窗口要在游戏启动前出现、同步一结束就消失。
+ * 除了画阶段与步骤，还带一个「取消更新」：点它先问一句跳过本次更新还是结束游戏，
+ * 真正的停止由主流程在安全点检查系统属性后执行。
  *
  * 所有更新方法都可以从任意线程调用，内部统一排到 Swing 事件线程。
  */
@@ -30,11 +33,17 @@ final class ProgressWindow implements Progress {
     /** 窗口标题 */
     private static final String TITLE = Text.of(Msg.MML_SERVER_INSTANCE_SYNC);
 
+    /** 取消状态写在系统属性里，主流程按它决定停不停；值：skip / end */
+    static final String CANCEL_KEY = "mml.serverSync.cancel";
+
     private final JFrame frame;
     private final JLabel titleLabel;
     private final JLabel stageLabel;
     private final JLabel detailLabel;
     private final JProgressBar bar;
+    private final JButton cancelButton;
+    /** 已经点过取消，别重复问 */
+    private boolean cancelRequested;
     /** 结束之后不再更新界面 */
     private final AtomicBoolean finished = new AtomicBoolean();
     /** 结束后窗口停留的时间，单位毫秒；0 表示立刻关掉 */
@@ -49,7 +58,13 @@ final class ProgressWindow implements Progress {
         }
 
         frame = new JFrame(TITLE);
-        frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent event) {
+                requestCancel();
+            }
+        });
         frame.setResizable(false);
         frame.setAlwaysOnTop(true);
 
@@ -68,11 +83,17 @@ final class ProgressWindow implements Progress {
         head.add(titleLabel);
         head.add(stageLabel);
 
+        cancelButton = new JButton(Text.of(Msg.CANCEL_UPDATE));
+        cancelButton.addActionListener(event -> requestCancel());
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(detailLabel, BorderLayout.WEST);
+        south.add(cancelButton, BorderLayout.EAST);
+
         JPanel root = new JPanel(new BorderLayout(0, 8));
         root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
         root.add(head, BorderLayout.NORTH);
         root.add(bar, BorderLayout.CENTER);
-        root.add(detailLabel, BorderLayout.SOUTH);
+        root.add(south, BorderLayout.SOUTH);
 
         frame.setContentPane(root);
         frame.pack();
@@ -170,6 +191,7 @@ final class ProgressWindow implements Progress {
             if (!frame.isDisplayable()) {
                 return;
             }
+            cancelButton.setEnabled(false);
             bar.setIndeterminate(false);
             bar.setValue(bar.getMaximum());
             bar.setString(ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
@@ -178,6 +200,7 @@ final class ProgressWindow implements Progress {
                 detailLabel.setForeground(new Color(0xB0, 0x30, 0x30));
             }
         });
+        System.clearProperty(CANCEL_KEY);
         if (lingerMillis > 0) {
             Thread closer = new Thread(() -> {
                 try {
@@ -192,6 +215,21 @@ final class ProgressWindow implements Progress {
         } else {
             dispose();
         }
+    }
+
+    /** 用户点了取消或关窗：先问一句，再决定停不停 */
+    private void requestCancel() {
+        if (finished.get() || cancelRequested) {
+            return;
+        }
+        CancelPrompt.Choice choice = CancelPrompt.ask(frame);
+        if (choice == CancelPrompt.Choice.CONTINUE) {
+            return;
+        }
+        cancelRequested = true;
+        cancelButton.setEnabled(false);
+        stageLabel.setText(Text.of(Msg.CANCELLING));
+        System.setProperty(CANCEL_KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
     }
 
     private void dispose() {

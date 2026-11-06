@@ -76,6 +76,27 @@ final class OptionalModsDialog {
         }
     }
 
+    /** 勾选结果：更新哪些、取消更新，还是结束游戏 */
+    static final class Result {
+        /** 未勾选的路径 */
+        final Set<String> unchecked;
+        /** 用户点了「取消同步」 */
+        final boolean cancelled;
+        /** 用户点了「结束游戏」 */
+        final boolean endGame;
+
+        Result(Set<String> unchecked, boolean cancelled, boolean endGame) {
+            this.unchecked = unchecked;
+            this.cancelled = cancelled;
+            this.endGame = endGame;
+        }
+
+        /** 全部更新：弹窗没打开时的兜底 */
+        static Result updateAll() {
+            return new Result(new LinkedHashSet<>(), false, false);
+        }
+    }
+
     /**
      * 弹出勾选窗并等待用户确认
      *
@@ -84,25 +105,25 @@ final class OptionalModsDialog {
      *
      * # 返回值
      *
-     * 未勾选的路径集合；用户点「取消同步」时返回 null
+     * 见 {@link Result}
      */
     @SuppressWarnings("unchecked")
-    static Set<String> ask(Component parent, List<Row> rows) {
+    static Result ask(Component parent, List<Row> rows) {
         if (SwingUtilities.isEventDispatchThread()) {
             return show(parent, rows);
         }
-        final Set<String>[] result = new Set[1];
+        final Result[] result = new Result[1];
         try {
             SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows));
         } catch (Exception e) {
             // 弹不出来别拦住同步：按全部更新处理
             Log.error(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG) + e.getMessage());
-            return new LinkedHashSet<>();
+            return Result.updateAll();
         }
         return result[0];
     }
 
-    private static Set<String> show(Component parent, List<Row> rows) {
+    private static Result show(Component parent, List<Row> rows) {
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MOD_UPDATES), true);
         dialog.setMinimumSize(new Dimension(680, 360));
 
@@ -178,10 +199,12 @@ final class OptionalModsDialog {
 
         final JCheckBox all = new JCheckBox(Text.of(Msg.SELECT_ALL), true);
         final JLabel count = new JLabel();
+        final JButton end = new JButton(Text.of(Msg.CANCEL_AFTER_END));
         final JButton cancel = new JButton(Text.of(Msg.CANCEL_SYNC));
         final JButton ok = new JButton(Text.of(Msg.UPDATE_SELECTED));
         final Set<String> unchecked = new LinkedHashSet<>();
         final boolean[] cancelled = {false};
+        final boolean[] endGame = {false};
 
         Runnable refresh = () -> {
             int checked = 0;
@@ -202,6 +225,10 @@ final class OptionalModsDialog {
             refresh.run();
         });
 
+        end.addActionListener(event -> {
+            endGame[0] = true;
+            dialog.dispose();
+        });
         cancel.addActionListener(event -> {
             cancelled[0] = true;
             dialog.dispose();
@@ -233,6 +260,7 @@ final class OptionalModsDialog {
         left.add(count);
         left.add(all);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        right.add(end);
         right.add(cancel);
         right.add(ok);
         JPanel footer = new JPanel(new BorderLayout());
@@ -250,7 +278,7 @@ final class OptionalModsDialog {
         dialog.pack();
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
-        return cancelled[0] ? null : unchecked;
+        return new Result(unchecked, cancelled[0], endGame[0]);
     }
 
     private static void toggle(DefaultTableModel model, int row) {

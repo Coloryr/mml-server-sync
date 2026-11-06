@@ -26,6 +26,8 @@ final class Sync {
     private static final String DISABLED_SUFFIX = ".disabled";
     /** 旧版禁用后缀，读取时仍认 */
     private static final String LEGACY_DISABLE_SUFFIX = ".disable";
+    /** 进度窗取消时写的系统属性，值：skip / end */
+    private static final String CANCEL_KEY = "mml.serverSync.cancel";
 
     private final Options options;
     private final Downloader downloader;
@@ -95,12 +97,15 @@ final class Sync {
         List<Manifest.FileEntry> optionalChanges = changedOptional(current, old, previousSkipped);
         if (!options.dryRun && skipPaths.isEmpty() && !optionalChanges.isEmpty() && canAsk()) {
             ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
-            Set<String> unchecked = askOptionalMods(optionalChanges, old);
-            if (unchecked == null) {
+            OptionalModsDialog.Result choice = askOptionalMods(optionalChanges, old);
+            if (choice.endGame) {
+                throw new SyncAbortException(Text.of(Msg.CANCEL_AFTER_ENDED));
+            }
+            if (choice.cancelled) {
                 info(Text.of(Msg.SYNC_CANCELLED_NO_FILES_CHANGED));
                 return Text.of(Msg.SYNC_CANCELLED);
             }
-            skipPaths.addAll(unchecked);
+            skipPaths.addAll(choice.unchecked);
         }
         if (!skipPaths.isEmpty()) {
             info(Text.of(Msg.SKIPPING_OPTIONAL_COUNT, skipPaths.size()));
@@ -118,6 +123,7 @@ final class Sync {
             printPlan(current, old, removedFiles, removedDirs);
             return Text.of(Msg.PLAN_ONLY_NO_FILES_CHANGED);
         }
+        checkCancelled();
         if (!options.noDelete) {
             applyRemovals(removedFiles, removedDirs);
         } else {
@@ -172,6 +178,7 @@ final class Sync {
         int done = downloadAll(tasks, total);
 
         if (baseTemp != null) {
+            checkCancelled();
             ui.stage(Text.of(Msg.EXTRACTING_BASE_PACK));
             Fs.extractZip(baseTemp, options.baseDir, true);
             Files.deleteIfExists(baseTemp);
@@ -181,6 +188,7 @@ final class Sync {
 
         downloaded.sort(Comparator.comparingInt((ArchivePlan plan) -> depth(plan.item.dir)));
         for (ArchivePlan plan : downloaded) {
+            checkCancelled();
             Path target = Fs.resolveSafe(options.gameDir, plan.item.dir);
             if (plan.item.deleteOld) {
                 Fs.deleteDirectory(target);
@@ -191,6 +199,7 @@ final class Sync {
             ui.step(++done, plan.item.dir);
         }
 
+        checkCancelled();
         saveState(data);
         Skipped.save(options.stateDir, skippedMarkers(current, old, previousSkipped, skipPaths));
         return Text.of(Msg.SYNC_COMPLETE_VERSION, current.packVersion);
@@ -254,6 +263,21 @@ final class Sync {
             }
         }
         return "";
+    }
+
+    /**
+     * 用户在进度窗上按了取消：到安全点就停
+     *
+     * 系统属性由进度窗写：skip 跳过本次更新（退出码 0），end 结束游戏（退出码 1）。
+     */
+    private static void checkCancelled() {
+        String state = System.getProperty(CANCEL_KEY, "");
+        if ("end".equalsIgnoreCase(state)) {
+            throw new SyncAbortException(Text.of(Msg.CANCEL_AFTER_ENDED));
+        }
+        if ("skip".equalsIgnoreCase(state)) {
+            throw new CancelledException(Text.of(Msg.UPDATE_CANCELLED_MIDWAY));
+        }
     }
 
     /** 清单的包版本，空串按「未标注」显示。 */
@@ -510,7 +534,7 @@ final class Sync {
     }
 
     /** 组装并弹出勾选窗，返回未勾选的路径 */
-    private Set<String> askOptionalMods(List<Manifest.FileEntry> items, Manifest old)
+    private OptionalModsDialog.Result askOptionalMods(List<Manifest.FileEntry> items, Manifest old)
             throws IOException {
         javax.swing.JFrame parent = ((ProgressWindow) ui).frame();
         List<OptionalModsDialog.Row> rows = new ArrayList<>(items.size());
@@ -803,6 +827,7 @@ final class Sync {
         try {
             for (DownloadTask task : tasks) {
                 futures.add(pool.submit(() -> {
+                    checkCancelled();
                     String url = task.entry == null
                             ? task.url
                             : downloader.resolveFile(task.entry);
@@ -817,6 +842,9 @@ final class Sync {
                     future.get();
                 } catch (ExecutionException e) {
                     Throwable cause = e.getCause();
+                    if (cause instanceof CancelledException || cause instanceof SyncAbortException) {
+                        throw (RuntimeException) cause;
+                    }
                     if (cause instanceof IOException) {
                         throw (IOException) cause;
                     }

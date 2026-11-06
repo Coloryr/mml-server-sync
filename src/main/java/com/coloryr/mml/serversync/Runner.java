@@ -65,11 +65,22 @@ public final class Runner {
                     Log.info(summary);
                 }
                 ui.finish(true, summary);
+            } catch (CancelledException e) {
+                // 用户选了「跳过更新」：退出码 0，游戏照常启动，下次启动补齐
+                ui.finish(false, e.getMessage());
+                Log.info(e.getMessage());
+                return 0;
+            } catch (SyncAbortException e) {
+                // 用户选了「结束游戏」：不按同步失败处理，直接以退出码 1 收尾
+                ui.finish(false, e.getMessage());
+                Log.info(e.getMessage());
+                return 1;
             } catch (Exception e) {
                 ui.finish(false, e.getMessage());
                 Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
                 throw e;
             } finally {
+                System.clearProperty("mml.serverSync.cancel");
                 Log.close();
             }
             return 0;
