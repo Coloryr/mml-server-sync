@@ -165,7 +165,8 @@ final class Sync {
 
         List<String> removedDirs = new ArrayList<>();
         Set<String> removedFiles = new java.util.HashSet<>();
-        planRemovals(old, current, removedFiles, removedDirs);
+        String selfJar = selfJarRelative();
+        planRemovals(old, current, removedFiles, removedDirs, selfJar);
         if (options.dryRun) {
             printOptionalPlan(current);
             printPlan(current, old, removedFiles, removedDirs);
@@ -180,7 +181,7 @@ final class Sync {
         }
 
         boolean needBase = current.base != null && (old == null || old.base == null);
-        List<PlannedFile> files = changedFiles(current);
+        List<PlannedFile> files = changedFiles(current, selfJar);
         List<ArchivePlan> archives = archivePlans(old, current, removedDirs);
         int archiveCount = 0;
         for (ArchivePlan plan : archives) {
@@ -556,7 +557,8 @@ final class Sync {
         }
     }
 
-    private void planRemovals(Manifest old, Manifest current, Set<String> files, List<String> dirs) {
+    private void planRemovals(Manifest old, Manifest current, Set<String> files, List<String> dirs,
+                              String selfJar) {
         if (old == null) {
             return;
         }
@@ -566,7 +568,8 @@ final class Sync {
         }
         for (Manifest.FileEntry item : old.files) {
             Manifest.FileEntry replacement = byIdentity.get(item.identity());
-            if (replacement == null || !replacement.path.equals(item.path)) {
+            if ((replacement == null || !replacement.path.equals(item.path))
+                    && !item.path.equals(selfJar)) {
                 files.add(item.path);
             }
         }
@@ -602,10 +605,18 @@ final class Sync {
      *
      * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
      * 自选模组的内容始终同步，勾选与否只决定装成启用名还是 .disabled。
+     *
+     * - `current`: 远程清单
+     * - `selfJar`: 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
      */
-    private List<PlannedFile> changedFiles(Manifest current) throws IOException {
+    private List<PlannedFile> changedFiles(Manifest current, String selfJar) throws IOException {
         List<PlannedFile> out = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
+            // 更新器自身在运行中无法被覆盖（Windows 文件锁）：升级走自更新通道
+            if (item.path.equals(selfJar)) {
+                info(Text.of(Msg.SELF_JAR_SKIPPED, item.path));
+                continue;
+            }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
             Path existing = existingVariant(target);
             if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
@@ -654,6 +665,26 @@ final class Sync {
     /** 条目的内容哈希：SHA1 优先，没有时用 SHA256 */
     private static String contentHash(Manifest.FileEntry item) {
         return item.sha1.isEmpty() ? item.sha256 : item.sha1;
+    }
+
+    /**
+     * 运行中的原始更新器 jar 对游戏目录的相对路径
+     *
+     * jar 不在游戏目录内、跨盘或未捕获时返回空串——相对化会带 .. 或抛异常，
+     * 而清单路径不允许 ..，永远不会与这种值相等。
+     */
+    private String selfJarRelative() {
+        String property = System.getProperty(Updater.SELF_JAR_KEY, "").trim();
+        if (property.isEmpty()) {
+            return "";
+        }
+        try {
+            Path jar = java.nio.file.Paths.get(property).toAbsolutePath().normalize();
+            return options.gameDir.toAbsolutePath().normalize().relativize(jar)
+                    .toString().replace('\\', '/');
+        } catch (RuntimeException e) {
+            return "";
+        }
     }
 
     /** 有界面、允许交互、也真的弹得出来时才弹窗 */

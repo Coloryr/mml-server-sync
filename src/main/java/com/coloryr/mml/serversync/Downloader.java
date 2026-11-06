@@ -246,10 +246,12 @@ final class Downloader {
     }
 
     byte[] fetch(String url, Map<String, String> headers, FetchListener listener) throws IOException {
+        final Map<String, String> safe = headers == null
+                ? Collections.<String, String>emptyMap() : headers;
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
-        return fetchBytes(url, headers, !quiet, listener);
+        return fetchBytes(url, safe, !quiet, listener);
     }
 
     /**

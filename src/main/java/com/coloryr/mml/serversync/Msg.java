@@ -68,6 +68,7 @@ enum Msg {
     DISABLED("，已禁用", ", disabled"),
     OPTIONAL_STATE_MIGRATED("已把旧版跳过记录迁移为自选模组选择状态", "Migrated the legacy skip records into the optional mod state"),
     FAILED_TO_READ_THE_OPTIONAL_STATE("读取自选模组状态失败: ", "Failed to read the optional mod state: "),
+    SELF_JAR_SKIPPED("跳过更新器自身: %s（升级走自更新通道）", "Skipping the updater itself: %s (upgrades go through the self-update channel)"),
     MML_SERVER_INSTANCE_SYNC("整合包更新", "Modpack update"),
     SYNCING_SERVER_INSTANCE("正在更新整合包", "Updating modpack"),
     PREPARING("正在准备更新", "Preparing update"),

@@ -10,11 +10,13 @@ import java.nio.file.Path;
  */
 public final class Main {
     /** 工具版本号，启动日志、--version 与自更新比较都用它 */
-    static final String VERSION = "1.4.0";
+    static final String VERSION = "1.4.1";
 
     private Main() {}
 
     public static void main(String[] args) {
+        // -jar 模式的原始 jar 就是主类所在 jar；先记下，同步计划据此跳过自身条目
+        Updater.captureSelfJar();
         // 独立运行时窗口多留一会儿，让用户看到结果；命令行模式等自更新收尾
         int code = Bootstrap.run(args, 900, true);
         if (code != 0) {

@@ -27,6 +27,15 @@ final class Updater {
     static final String DEFAULT_INDEX =
             "https://www.coloryr.com/mml-server-sync/index.json";
 
+    /**
+     * 原始更新器 jar 路径的系统属性键。
+     *
+     * 入口（premain / main）在启动时用类加载源捕获并写入；从 update/ 包运行时
+     * 类加载源指向 update/ 里的副本，而 JVM 独占锁着的、清单条目对应的
+     * 是 -javaagent / -jar 指定的那份原始 jar，两者不能混用。
+     */
+    static final String SELF_JAR_KEY = "mml.serverSync.selfJar";
+
     /** 更新包目录名，放在 jar 同目录下 */
     private static final String UPDATE_DIR = "update";
     /** 更新包文件名前缀，中间是版本号 */
@@ -130,6 +139,14 @@ final class Updater {
         writeSidecar(target, SHA256_SIDECAR, sha256);
         prune(dir, target);
         Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
+    }
+
+    /** 把原始 jar 路径记进系统属性，供同步计划跳过自身条目；须在入口最先调用 */
+    static void captureSelfJar() {
+        Path jar = jarPath();
+        if (jar != null) {
+            System.setProperty(SELF_JAR_KEY, jar.toAbsolutePath().normalize().toString());
+        }
     }
 
     /**
