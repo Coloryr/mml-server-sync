@@ -9,6 +9,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -19,6 +20,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** 一次服务器实例更新。 */
 final class Sync {
+    /** 禁用后缀：与 MMC / HMCL 一致 */
+    private static final String DISABLED_SUFFIX = ".disabled";
+    /** 旧版禁用后缀，读取时仍认 */
+    private static final String LEGACY_DISABLE_SUFFIX = ".disable";
+
     private final Options options;
     private final Downloader downloader;
     private final Path tempDir;
@@ -63,6 +69,9 @@ final class Sync {
             validate(old);
         }
 
+        // 删旧文件之前先记下玩家启用着的条目：可选模组换文件名时按它延续启用状态
+        Set<String> keptEnabled = enabledIdentities(old);
+
         List<String> removedDirs = new ArrayList<>();
         Set<String> removedFiles = new HashSet<>();
         planRemovals(old, current, removedFiles, removedDirs);
@@ -77,7 +86,7 @@ final class Sync {
         }
 
         boolean needBase = current.base != null && (old == null || old.base == null);
-        List<Manifest.FileEntry> files = changedFiles(current);
+        List<PlannedFile> files = changedFiles(current, keptEnabled);
         List<ArchivePlan> archives = archivePlans(old, current, removedDirs);
         int archiveCount = 0;
         for (ArchivePlan plan : archives) {
@@ -98,9 +107,9 @@ final class Sync {
             tasks.add(new DownloadTask(base.url, baseTemp, base.sha1, base.sha256, null));
         }
 
-        for (Manifest.FileEntry item : files) {
-            Path target = Fs.resolveSafe(options.gameDir, item.path);
-            tasks.add(new DownloadTask(null, target, item.sha1, item.sha256, item));
+        for (PlannedFile planned : files) {
+            tasks.add(new DownloadTask(null, planned.target, planned.item.sha1, planned.item.sha256,
+                    planned.item));
         }
 
         List<ArchivePlan> downloaded = new ArrayList<>();
@@ -230,15 +239,84 @@ final class Sync {
         }
     }
 
-    private List<Manifest.FileEntry> changedFiles(Manifest current) throws IOException {
-        List<Manifest.FileEntry> out = new ArrayList<>();
+    /**
+     * 算出要下载的文件与各自落盘位置。
+     *
+     * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
+     * 本地没有、清单又标了可选时写在禁用名下，装完默认不加载。
+     */
+    private List<PlannedFile> changedFiles(Manifest current, Set<String> keptEnabled)
+            throws IOException {
+        List<PlannedFile> out = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
             Path target = Fs.resolveSafe(options.gameDir, item.path);
-            if (!downloader.matches(target, item.sha1, item.sha256)) {
-                out.add(item);
+            Path existing = existingVariant(target);
+            if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
+                continue;
+            }
+            // 玩家之前启用着这条（可能换了文件名）时，新版本照样装成启用
+            boolean disable = item.optional && !keptEnabled.contains(item.identity());
+            Path file = existing != null ? existing
+                    : disable ? withSuffix(target, DISABLED_SUFFIX) : target;
+            out.add(new PlannedFile(item, file));
+        }
+        return out;
+    }
+
+    /**
+     * 旧清单里玩家处于启用状态的条目身份。
+     *
+     * 可选模组换文件名时按项目号延续启用状态：玩家启用过的，更新版本后不要重新禁用。
+     * 必须在删除旧文件之前调用，否则读不到本地的启用 / 禁用状态。
+     */
+    private Set<String> enabledIdentities(Manifest old) {
+        Set<String> out = new HashSet<>();
+        if (old == null) {
+            return out;
+        }
+        for (Manifest.FileEntry item : old.files) {
+            Path target;
+            try {
+                target = Fs.resolveSafe(options.gameDir, item.path);
+            } catch (IOException e) {
+                continue;
+            }
+            Path existing = existingVariant(target);
+            if (existing != null && !isDisabled(existing)) {
+                out.add(item.identity());
             }
         }
         return out;
+    }
+
+    /** 文件名是不是禁用状态（.disabled 或旧版 .disable） */
+    private static boolean isDisabled(Path file) {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(DISABLED_SUFFIX) || name.endsWith(LEGACY_DISABLE_SUFFIX);
+    }
+
+    /**
+     * 本地已有的文件：原始名，或追加了 .disabled / .disable 后缀的禁用版。
+     *
+     * 模组、资源包被禁用后文件名会变，按原始路径判断存在性会把「已经装好但停用」当成没装，
+     * 每次同步覆盖一次，玩家停用的东西就又被装回启用了。
+     */
+    private static Path existingVariant(Path target) {
+        if (Files.isRegularFile(target)) {
+            return target;
+        }
+        for (String suffix : new String[]{DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
+            Path candidate = withSuffix(target, suffix);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** 给文件名追加后缀，如 `mods/a.jar` → `mods/a.jar.disabled` */
+    private static Path withSuffix(Path target, String suffix) {
+        return target.resolveSibling(target.getFileName().toString() + suffix);
     }
 
     private List<ArchivePlan> archivePlans(Manifest old, Manifest current, List<String> removedDirs) {
@@ -387,6 +465,17 @@ final class Sync {
         }
     }
 
+    /** 需要下载的一个文件：清单条目与落盘位置 */
+    private static final class PlannedFile {
+        final Manifest.FileEntry item;
+        final Path target;
+
+        PlannedFile(Manifest.FileEntry item, Path target) {
+            this.item = item;
+            this.target = target;
+        }
+    }
+
     /** 一个待下载条目 */
     private static final class DownloadTask {
         /// 直接可用的地址；为空时用 `entry` 解析平台地址
@@ -430,10 +519,32 @@ final class Sync {
 
     private static String toUrl(String value) throws IOException {
         String text = value.trim();
+        // Windows 盘符路径（D:\x、D:/x）不是 URL：交给下面的 scheme 正则会被当成「D:」协议
+        if (isWindowsPath(text)) {
+            return fileUri(text);
+        }
         if (text.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")) {
             return text;
         }
-        return java.nio.file.Paths.get(text).toAbsolutePath().normalize().toUri().toString();
+        return fileUri(text);
+    }
+
+    /** 是不是带盘符的 Windows 绝对路径，如 D:\dir\server.json 或 D:/dir/server.json */
+    private static boolean isWindowsPath(String text) {
+        if (text.length() < 3 || text.charAt(1) != ':' || !isAsciiLetter(text.charAt(0))) {
+            return false;
+        }
+        char separator = text.charAt(2);
+        return separator == '\\' || separator == '/';
+    }
+
+    private static boolean isAsciiLetter(char value) {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+    }
+
+    /** 本地路径转 file URI，相对路径按当前目录解析 */
+    private static String fileUri(String path) throws IOException {
+        return java.nio.file.Paths.get(path).toAbsolutePath().normalize().toUri().toString();
     }
 
     private static final class ArchivePlan {

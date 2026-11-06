@@ -48,7 +48,7 @@ final class Manifest {
             files.add(new FileEntry(path, Json.string(item, "ProjectId"),
                     Json.string(item, "FileId"), Json.string(item, "Url"),
                     Json.string(item, "Sha1"), Json.string(item, "Sha256"),
-                    Json.bool(item, "Custom")));
+                    Json.bool(item, "Custom"), Json.bool(item, "Optional")));
         }
         List<ArchiveEntry> archives = new ArrayList<>();
         List<Object> rawArchives = Json.list(root.get("Archives"));
@@ -147,9 +147,11 @@ final class Manifest {
         final String sha1;
         final String sha256;
         final boolean custom;
+        /** 是否可选模组：首次同步时装成禁用，玩家可以自己启用 */
+        final boolean optional;
 
         FileEntry(String path, String pid, String fid, String url, String sha1, String sha256,
-                  boolean custom) {
+                  boolean custom, boolean optional) {
             this.path = path.replace('\\', '/');
             this.pid = trim(pid);
             this.fid = trim(fid);
@@ -157,6 +159,7 @@ final class Manifest {
             this.sha1 = trim(sha1);
             this.sha256 = trim(sha256);
             this.custom = custom;
+            this.optional = optional;
         }
 
         String identity() {
