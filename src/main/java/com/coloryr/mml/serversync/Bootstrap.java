@@ -75,7 +75,7 @@ final class Bootstrap {
             if (waitUpdate) {
                 join(updater);
             }
-            closeUnfinished(progress);
+            closeUnfinished(progress, lingerMillis);
         }
         return code;
     }
@@ -174,10 +174,25 @@ final class Bootstrap {
         return version.isEmpty() ? null : version;
     }
 
-    /** 没有走到 finish 的分支（参数错误等）兜底关窗，别留一个关不掉的浮窗 */
-    private static void closeUnfinished(Progress progress) {
-        if (progress instanceof ProgressWindow && !((ProgressWindow) progress).finished()) {
-            ((ProgressWindow) progress).close();
+    /**
+     * 兜底关窗：没走到 finish 的分支（参数错误等）直接关；游戏模式下 finish 之后
+     * 窗口仍未释放的也强制关掉，避免 AWT 线程拖住 JVM，让启动器一直显示游戏在运行。
+     * 独立运行模式有意的停留时间不受影响。
+     *
+     * - `progress`: 本次运行的进度窗口
+     * - `lingerMillis`: 进度窗口结束后停留多久；0 表示游戏模式，不留停留时间
+     */
+    private static void closeUnfinished(Progress progress, int lingerMillis) {
+        if (!(progress instanceof ProgressWindow)) {
+            return;
+        }
+        ProgressWindow window = (ProgressWindow) progress;
+        if (!window.finished()) {
+            window.close();
+            return;
+        }
+        if (lingerMillis <= 0) {
+            window.ensureDisposed();
         }
     }
 

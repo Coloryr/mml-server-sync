@@ -146,6 +146,12 @@ final class ProgressWindow implements Progress {
         dispose();
     }
 
+    /** 确保窗口已关闭并标记结束；已经关掉时再调一次没有副作用 */
+    void ensureDisposed() {
+        finished.set(true);
+        dispose();
+    }
+
     @Override
     public void title(String text) {
         update(() -> titleLabel.setText(text == null || text.isEmpty() ? Text.of(Msg.SYNCING_SERVER_INSTANCE) : text));
@@ -230,6 +236,20 @@ final class ProgressWindow implements Progress {
         cancelButton.setEnabled(false);
         stageLabel.setText(Text.of(Msg.CANCELLING));
         System.setProperty(CANCEL_KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
+        // 主线程可能还阻塞在网络读取上，轮询到取消状态要等下一 MB 边界：
+        // 给它 2 秒自行收尾，超时就不等了，直接关窗
+        Thread closer = new Thread(() -> {
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            if (!finished.getAndSet(true)) {
+                dispose();
+            }
+        }, "mml-server-sync-cancel-closer");
+        closer.setDaemon(true);
+        closer.start();
     }
 
     private void dispose() {

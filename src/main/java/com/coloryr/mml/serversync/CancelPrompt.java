@@ -58,6 +58,8 @@ final class CancelPrompt {
     private static Choice show(Component parent) {
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.CANCEL_DIALOG_TITLE), true);
         final Choice[] choice = {Choice.CONTINUE};
+        // 点对话框的关闭按钮等于「继续更新」：释放资源后照常返回，不留一个只隐藏未释放的窗口
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
         JLabel question = new JLabel(Text.of(Msg.CANCEL_DIALOG_QUESTION));
         question.setBorder(BorderFactory.createEmptyBorder(0, 0, 14, 0));

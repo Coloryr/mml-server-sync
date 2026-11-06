@@ -205,6 +205,15 @@ final class OptionalModsDialog {
         final Set<String> unchecked = new LinkedHashSet<>();
         final boolean[] cancelled = {false};
         final boolean[] endGame = {false};
+        // 点关闭按钮与按 Esc 同义：关窗等于取消同步，窗口要真正释放而不是只隐藏
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent event) {
+                cancelled[0] = true;
+                dialog.dispose();
+            }
+        });
 
         Runnable refresh = () -> {
             int checked = 0;
