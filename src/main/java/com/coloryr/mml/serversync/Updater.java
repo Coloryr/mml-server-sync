@@ -83,9 +83,21 @@ final class Updater {
         if (index.isEmpty()) {
             index = DEFAULT_INDEX;
         }
+        byte[] body;
+        try {
+            body = fetch(index);
+        } catch (IOException e) {
+            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, describe(e)));
+            return;
+        }
+        if (looksLikeHtml(body)) {
+            // 索引地址被指到网页（常见于域名首页）时说清楚，别只报一个 JSON 字符错
+            Log.info(Text.of(Msg.UPDATE_INDEX_IS_A_WEB_PAGE_SKIPPING, index));
+            return;
+        }
         Map<String, Object> root;
         try {
-            root = Json.map(Json.parse(fetch(index)));
+            root = Json.map(Json.parse(body));
         } catch (IOException e) {
             Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, describe(e)));
             return;
@@ -353,6 +365,20 @@ final class Updater {
             }
         }
         return out;
+    }
+
+    /** 响应体开头是 '<'（跳过 BOM 与空白）时，基本可以确定是网页而不是 JSON */
+    private static boolean looksLikeHtml(byte[] data) {
+        int index = 0;
+        if (data.length >= 3 && (data[0] & 0xFF) == 0xEF && (data[1] & 0xFF) == 0xBB
+                && (data[2] & 0xFF) == 0xBF) {
+            index = 3;
+        }
+        while (index < data.length && ((data[index] & 0xFF) == ' ' || (data[index] & 0xFF) == '\n'
+                || (data[index] & 0xFF) == '\r' || (data[index] & 0xFF) == '\t')) {
+            index++;
+        }
+        return index < data.length && data[index] == '<';
     }
 
     private static String describe(Throwable error) {

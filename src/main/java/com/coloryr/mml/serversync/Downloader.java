@@ -13,16 +13,19 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipException;
 
 /** HTTP 下载、平台地址解析与哈希校验。 */
 final class Downloader {
     /** 字节进度两条日志的最小间隔，单位纳秒 */
     private static final long REPORT_INTERVAL = 1_000_000_000L;
+    /** 拉清单时每读这么多字节看一眼取消状态 */
+    private static final long CANCEL_CHECK_INTERVAL = 256 * 1024L;
 
     private final String apiKey;
     private final boolean quiet;
@@ -141,12 +144,13 @@ final class Downloader {
         MessageDigest sha1Digest = digest("SHA-1");
         MessageDigest sha256Digest = digest("SHA-256");
         try {
-            URLConnection connection = open(url, Collections.<String, String>emptyMap());
-            long total = connection.getContentLengthLong();
+            URLConnection connection = open(url, Collections.<String, String>emptyMap(), false);
+            // 服务端强行压缩时长度是压缩后的，进度按"未知总长"显示，免得百分比超 100
+            long total = isGzip(connection.getContentEncoding()) ? -1 : connection.getContentLengthLong();
             long done = 0;
             long lastDone = 0;
             long lastTime = System.nanoTime();
-            try (InputStream input = connection.getInputStream();
+            try (InputStream input = body(connection);
                  OutputStream output = Files.newOutputStream(temp)) {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
@@ -203,16 +207,14 @@ final class Downloader {
      * - `elapsed`: 距上一条进度的纳秒数
      */
     private static void report(Path target, long done, long total, long delta, long elapsed) {
-        double seconds = elapsed / 1_000_000_000.0;
-        double speed = seconds <= 0 ? 0 : delta / 1048576.0 / seconds;
-        String size = total > 0
-                ? String.format(Locale.ROOT, "%.1f/%.1f MB", done / 1048576.0, total / 1048576.0)
-                : String.format(Locale.ROOT, "%.1f MB", done / 1048576.0);
+        double elapsedSeconds = elapsed / 1_000_000_000.0;
+        double speed = elapsedSeconds <= 0 ? 0 : delta / elapsedSeconds;
+        String size = total > 0 ? sizeText(done) + "/" + sizeText(total) : sizeText(done);
         String percent = total > 0
                 ? String.format(Locale.ROOT, " %d%%", done * 100 / total)
                 : "";
         Log.info("[download] " + target.getFileName() + percent + " (" + size + ", "
-                + String.format(Locale.ROOT, "%.1f MB/s", speed) + ")");
+                + speedText(speed) + ")");
     }
 
     byte[] fetch(String url) throws IOException {
@@ -231,38 +233,116 @@ final class Downloader {
      * 响应体内容；取不到时抛 IOException
      */
     byte[] fetchQuiet(String url) throws IOException {
-        URLConnection connection = open(url, Collections.<String, String>emptyMap());
-        try (InputStream input = connection.getInputStream()) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[16 * 1024];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                out.write(buffer, 0, read);
-            }
-            return out.toByteArray();
-        }
+        return fetchBytes(url, Collections.<String, String>emptyMap(), false);
     }
 
     byte[] fetch(String url, Map<String, String> headers) throws IOException {
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
-        URLConnection connection = open(url, headers);
-        try (InputStream input = connection.getInputStream()) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[16 * 1024];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                out.write(buffer, 0, read);
+        return fetchBytes(url, headers, !quiet);
+    }
+
+    /**
+     * 取一份 JSON
+     *
+     * 默认带 `Accept-Encoding: gzip`：8 MB 的清单压到 1 MB 以内，慢速线路上的等待时间
+     * 跟着传输字节数一起降下来。读的过程中每秒打一条字节进度，并每 256 KB 检查一次取消，
+     * 免得看起来像卡死。
+     *
+     * 个别反代会声明 gzip 却给未压缩的内容，此时退回不压缩再取一次。
+     *
+     * - `url`: 地址
+     * - `headers`: 额外请求头
+     * - `verbose`: 是否打进度与结果日志
+     *
+     * # 返回值
+     *
+     * 解压后的响应体
+     */
+    private byte[] fetchBytes(String url, Map<String, String> headers, boolean verbose)
+            throws IOException {
+        long started = System.nanoTime();
+        byte[] data;
+        try {
+            data = readBody(url, headers, true, verbose);
+        } catch (ZipException e) {
+            // 头里写了 gzip、内容却不是：按未压缩再取一次
+            if (verbose) {
+                Log.info(Text.of(Msg.GZIP_BODY_INVALID_RETRYING_WITHOUT_COMPRESSION, url));
             }
-            if (!quiet) {
-                Log.info(Text.of(Msg.DOWNLOADER_JSON_FETCHED, out.size(), url));
-            }
-            return out.toByteArray();
+            data = readBody(url, headers, false, verbose);
+        }
+        if (verbose) {
+            Log.info(Text.of(Msg.DOWNLOADER_JSON_FETCHED, data.length, seconds(started), url));
+        }
+        return data;
+    }
+
+    /** 打开连接并把响应体整段读进来；`gzip` 决定要不要请求压缩传输 */
+    private static byte[] readBody(String url, Map<String, String> headers, boolean gzip,
+                                   boolean verbose) throws IOException {
+        URLConnection connection = open(url, headers, gzip);
+        long total = connection.getContentLengthLong();
+        boolean compressed = isGzip(connection.getContentEncoding());
+        if (verbose && total > 0) {
+            Log.info(Text.of(Msg.FETCHING_JSON_SIZE, total,
+                    compressed ? Text.of(Msg.GZIP_SUFFIX) : "", url));
+        } else if (verbose && compressed) {
+            // chunked 响应没有 Content-Length，但压缩是否生效仍然值得写一行
+            Log.info(Text.of(Msg.GZIP_TRANSFER, url));
+        }
+        try (InputStream input = body(connection)) {
+            return readAll(input, url, total, verbose);
         }
     }
 
-    private static URLConnection open(String text, Map<String, String> headers) throws IOException {
+    /**
+     * 读完一个流，顺带打进度、查取消
+     *
+     * - `input`: 响应体，已按 Content-Encoding 解压
+     * - `url`: 地址，进进度日志
+     * - `total`: 服务端给的传输字节数；未知时为 0 或负数
+     * - `verbose`: 是否每秒打一条进度
+     */
+    private static byte[] readAll(InputStream input, String url, long total, boolean verbose)
+            throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(
+                total > 0 && total <= Integer.MAX_VALUE - 8 ? (int) total : 8192);
+        byte[] buffer = new byte[16 * 1024];
+        long done = 0;
+        long lastDone = 0;
+        long lastTime = System.nanoTime();
+        long lastCancel = 0;
+        int read;
+        while ((read = input.read(buffer)) >= 0) {
+            out.write(buffer, 0, read);
+            done += read;
+            // 清单可能有几 MB：取消要能很快生效
+            if (done - lastCancel >= CANCEL_CHECK_INTERVAL) {
+                lastCancel = done;
+                Cancels.check();
+            }
+            long now = System.nanoTime();
+            if (verbose && now - lastTime >= REPORT_INTERVAL) {
+                reportFetch(url, done, total, done - lastDone, now - lastTime);
+                lastDone = done;
+                lastTime = now;
+            }
+        }
+        return out.toByteArray();
+    }
+
+    /** 打印一条清单接收进度，约每秒一条 */
+    private static void reportFetch(String url, long done, long total, long delta, long elapsed) {
+        double elapsedSeconds = elapsed / 1_000_000_000.0;
+        double speed = elapsedSeconds <= 0 ? 0 : delta / elapsedSeconds;
+        String size = total > 0 ? sizeText(done) + "/" + sizeText(total) : sizeText(done);
+        Log.info(Text.of(Msg.FETCHING_JSON_PROGRESS, size, speedText(speed), url));
+    }
+
+    private static URLConnection open(String text, Map<String, String> headers, boolean gzip)
+            throws IOException {
         URL url;
         try {
             url = new URL(text);
@@ -271,7 +351,11 @@ final class Downloader {
         }
         URLConnection connection = url.openConnection();
         connection.setConnectTimeout(20000);
+        // 单次 read 的上限；只要一直有字节进来就不会触发，慢速线路靠上面的进度日志看动静
         connection.setReadTimeout(120000);
+        if (gzip) {
+            connection.setRequestProperty("Accept-Encoding", "gzip");
+        }
         for (Map.Entry<String, String> header : headers.entrySet()) {
             connection.setRequestProperty(header.getKey(), header.getValue());
         }
@@ -285,6 +369,39 @@ final class Downloader {
             }
         }
         return connection;
+    }
+
+    /** 按 Content-Encoding 套上解压流；服务端没压缩时原样返回 */
+    private static InputStream body(URLConnection connection) throws IOException {
+        InputStream input = connection.getInputStream();
+        if (isGzip(connection.getContentEncoding())) {
+            return new GZIPInputStream(input, 16 * 1024);
+        }
+        return input;
+    }
+
+    private static boolean isGzip(String encoding) {
+        return encoding != null && encoding.toLowerCase(Locale.ROOT).contains("gzip");
+    }
+
+    /** 字节数按 KB / MB 显示 */
+    private static String sizeText(long bytes) {
+        return bytes < 1048576L
+                ? String.format(Locale.ROOT, "%.0f KB", bytes / 1024.0)
+                : String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
+    }
+
+    /** 速度按 KB/s / MB/s 显示 */
+    private static String speedText(double bytesPerSecond) {
+        return bytesPerSecond < 1048576.0
+                ? String.format(Locale.ROOT, "%.0f KB/s", bytesPerSecond / 1024.0)
+                : String.format(Locale.ROOT, "%.1f MB/s", bytesPerSecond / 1048576.0);
+    }
+
+    /** 从计时起点到现在的秒数，保留一位小数 */
+    private static String seconds(long startedNanos) {
+        return String.format(Locale.ROOT, "%.1f",
+                (System.nanoTime() - startedNanos) / 1_000_000_000.0);
     }
 
     static boolean matches(Path file, String sha1, String sha256) {

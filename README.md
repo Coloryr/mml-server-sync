@@ -34,6 +34,10 @@ MML 服务器实例专用更新器，只读取 MML 生成的 `server.json`，同
 - 同步日志写在 `<状态目录>/mml-server-sync.log`，每行以 `[MML-SERVER-SYNC]` 开头，
   日志文件可用 `-Dmml.serverSync.log=...` 覆盖。
 - 下载时每秒打一条字节进度，例如 `[download] config.zip 43% (9.2/22.0 MB, 6.3 MB/s)`。
+- 拉清单默认带 `Accept-Encoding: gzip`：Gitea 这类支持压缩的托管会把 8 MB 的 `server.json`
+  按约 1 MB 传输，慢速线路上等待时间跟着传输字节数一起降。收清单时每秒一条
+  `清单接收中 3.4 MB/7.7 MB（44 KB/s）`，慢也只是慢，不会看起来像卡死。
+  同一数字停住超过 120 秒（单次读超时）就会报错退出，不会永远挂着。
 - 命令行模式仍然可用，见下文；两种模式共用同一个 jar。
 
 ### 怎么识别 MML 启动器
@@ -76,7 +80,7 @@ Java 8 没有 `ProcessHandle`，靠第 1–3 条；只要 MML 开着默认用户
 
 - **取消**：跑更新时点「取消更新」（或关窗）会问一句——跳过本次更新（退出码 0，游戏照常启动，
   已写入的文件下次启动补齐）还是结束游戏（退出码 1，agent / 启动前脚本中止启动）；点 Esc 继续更新。
-  下载与解压循环里每 1MB 检查一次，点完大约 1 秒内停下，不等的当前文件下完。
+  下载与解压循环里每 1MB、收清单时每 256 KB 检查一次，点完大约 1 秒内停下，不等的当前文件下完。
 - 关掉窗口：命令行 `--no-gui`，JVM 属性 `-Dmml.serverSync.gui=false`，
   环境变量 `MML_SERVER_SYNC_NO_GUI=1`。
 - 无图形环境（纯终端服务器、headless）自动不显示，不用额外参数。
@@ -96,8 +100,8 @@ jar 放在同一个目录）。版本比当前程序新，就把新 jar 下到�
 
 ```json
 {
-  "version": "1.2.1",
-  "url": "mml-server-sync-1.2.1.jar",
+  "version": "1.3.5",
+  "url": "mml-server-sync-1.3.5.jar",
   "sha1": "可选的 SHA1，填了就校验",
   "sha256": "可选的 SHA256，填了就校验",
   "notes": "可选，只写进日志"
@@ -112,6 +116,8 @@ jar 放在同一个目录）。版本比当前程序新，就把新 jar 下到�
 - 换索引：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、
   `MML_SERVER_SYNC_INDEX=...`；本地调试可用 `file:///D:/.../index.json`。
 - 关掉自更新：`--no-update`、`-Dmml.serverSync.update=false`、`MML_SERVER_SYNC_NO_UPDATE=1`。
+- 索引必须是 JSON。地址被指到网页（常见于域名首页）时只记一行
+  `更新索引返回的是网页而不是 JSON，跳过自更新`，不影响同步。
 - 任何一步失败只记一行日志，不影响同步本身。
 
 ## 可选模组勾选
@@ -249,6 +255,7 @@ if errorlevel 1 exit /b 1
 
 - **清单指纹**：发布目录里有 `server.json.sha1` 时先取它和本地清单比 SHA1，没变就跳过整份
   下载；没有这个文件、取不到或内容不是 40 位哈希时照旧下载 `server.json`。`--force` 不看指纹。
+  指纹只比字节：换过清单内容就要重下一份，这一步默认请求 gzip 压缩，且日志里每秒一条进度。
 - **版本**：清单的 `PackVersion` 与上次状态相同则直接跳过；`--force` 可强制。
 - **文件**：清单 `Files` / `files` 里的相对路径按 SHA1（没有则 SHA256）比对；
   缺失或哈希不同的才下载。被改名停用的文件（`.disabled` / 旧版 `.disable`，不限 `.jar`）
