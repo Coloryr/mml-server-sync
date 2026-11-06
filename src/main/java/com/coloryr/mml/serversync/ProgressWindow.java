@@ -47,7 +47,6 @@ final class ProgressWindow implements Progress {
     /** 已经点过取消，别重复问 */
     private boolean cancelRequested;
     /** 「自选模组」点击回调，由同步流程安装；弹窗在回调里打开，阻塞在本回调直到玩家确认 */
-    private volatile Runnable optionalHandler;
     /** 结束之后不再更新界面 */
     private final AtomicBoolean finished = new AtomicBoolean();
     /** 结束后窗口停留的时间，单位毫秒；0 表示立刻关掉 */
@@ -93,7 +92,6 @@ final class ProgressWindow implements Progress {
         // 与取消更新同尺寸并排放置（FlowLayout 自然尺寸），不横向拉伸
         optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
         optionalButton.setEnabled(false);
-        optionalButton.addActionListener(event -> requestOptionalManage());
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         buttons.add(optionalButton);
         buttons.add(cancelButton);
@@ -162,35 +160,6 @@ final class ProgressWindow implements Progress {
     void ensureDisposed() {
         finished.set(true);
         dispose();
-    }
-
-    /** 安装「自选模组」点击回调；回调在事件线程上执行，弹窗在回调里打开 */
-    void setOptionalHandler(Runnable handler) {
-        optionalHandler = handler;
-    }
-
-    /** 清单解析完成、可以管理自选模组时恢复按钮可点 */
-    void enableOptionalModsButton() {
-        update(() -> {
-            if (!finished.get()) {
-                optionalButton.setEnabled(true);
-            }
-        });
-    }
-
-    /** 用户点了「自选模组」：交给回调打开弹窗；弹窗期间按钮置灰 */
-    private void requestOptionalManage() {
-        if (finished.get() || optionalHandler == null) {
-            return;
-        }
-        optionalButton.setEnabled(false);
-        try {
-            optionalHandler.run();
-        } finally {
-            if (!finished.get()) {
-                optionalButton.setEnabled(true);
-            }
-        }
     }
 
     @Override

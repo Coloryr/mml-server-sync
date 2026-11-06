@@ -130,14 +130,15 @@ final class Sync {
         }
 
         // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
-        // 按钮接线依赖具体窗口类：从 update/ 包运行时类加载器分裂，
-        // instanceof 不成立，按钮在过渡期保持置灰，弹窗本身不受影响。
+        // 按钮按文字在窗口树里定位后直接挂监听：从 update/ 包运行时类加载器分裂，
+        // 无法用具体窗口类型接线，扫描方式两种运行形态通用。
         if (canAsk()) {
             optionalNotes = fetchOptionalNotes(manifestUrl);
-        }
-        if (hasButtonUi()) {
-            ((ProgressWindow) ui).setOptionalHandler(this::openManageDialog);
-            ((ProgressWindow) ui).enableOptionalModsButton();
+            javax.swing.JButton button = findOptionalButton();
+            if (button != null) {
+                button.setEnabled(true);
+                button.addActionListener(event -> openManageDialog());
+            }
         }
 
         Manifest old = loadOld(current);
@@ -693,9 +694,29 @@ final class Sync {
         return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless();
     }
 
-    /** 按钮接线是否可用：弹窗之外还需要能拿到具体窗口类（不经 update/ 运行时才成立） */
-    private boolean hasButtonUi() {
-        return canAsk() && ui instanceof ProgressWindow;
+    /** 进度窗上的「自选模组」按钮：跨类加载器不能按类型接线，按文字在窗口树里定位 */
+    private javax.swing.JButton findOptionalButton() {
+        javax.swing.JFrame frame = ownerFrame();
+        if (frame == null) {
+            return null;
+        }
+        return findButtonByText(frame.getContentPane(), Text.of(Msg.OPTIONAL_MODS_BUTTON));
+    }
+
+    private static javax.swing.JButton findButtonByText(java.awt.Container root, String text) {
+        for (java.awt.Component child : root.getComponents()) {
+            if (child instanceof javax.swing.JButton
+                    && text.equals(((javax.swing.JButton) child).getText())) {
+                return (javax.swing.JButton) child;
+            }
+            if (child instanceof java.awt.Container) {
+                javax.swing.JButton found = findButtonByText((java.awt.Container) child, text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     /** 找正在显示的进度窗当弹窗父窗口；没有时返回 null，对话框居屏幕中 */
