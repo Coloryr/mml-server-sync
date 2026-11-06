@@ -3,6 +3,8 @@ package com.coloryr.mml.serversync;
 import java.lang.instrument.Instrumentation;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -28,34 +30,70 @@ public final class Agent {
         if (manifest.isEmpty()) {
             throw new RuntimeException("mml-server-sync: -javaagent 参数缺少清单 URL");
         }
+        int code;
         try {
-            Options options = new Options();
-            options.manifest = manifest;
-            options.gameDir = gameDir;
-            options.baseDir = Main.defaultBaseDir(gameDir);
-            options.stateDir = stateDir(gameDir);
-            options.quiet = false;
-            options.lenient = true;
-            options.threads = threadsOf(System.getProperty("mml.serverSync.threads"));
-            options.force = truthy(System.getProperty("mml.serverSync.force"))
-                    || truthy(System.getenv("MML_SERVER_SYNC_FORCE"));
-            String apiKey = System.getenv("CURSEFORGE_API_KEY");
-            options.apiKey = apiKey == null ? "" : apiKey.trim();
-            options.logFile = logFile(options.stateDir);
-            Log.open(options.logFile);
-            Log.info("mml-server-sync " + Main.VERSION);
-            Log.info("开始同步，游戏目录 " + gameDir);
-            try {
-                new Sync(options).run();
-            } catch (Exception e) {
-                Log.error("更新失败: " + e.getMessage());
-                throw e;
-            } finally {
-                Log.close();
-            }
-        } catch (Exception e) {
+            // 游戏在等 premain 返回，窗口不留、自更新不等
+            code = Bootstrap.run(agentArgs(manifest, gameDir), 0, false);
+        } catch (Throwable e) {
             throw new RuntimeException("mml-server-sync 更新失败，已中止游戏启动", e);
         }
+        if (code != 0) {
+            throw new RuntimeException("mml-server-sync 更新失败，已中止游戏启动（退出码 " + code + "）");
+        }
+    }
+
+    /**
+     * 把 agent 的配置翻成命令行参数，交给 Runner 解析
+     *
+     * 自更新会加载新版本，入参统一走命令行，两个入口就只用维护一套解析逻辑。
+     *
+     * - `manifest`: 清单地址
+     * - `gameDir`: 游戏目录
+     *
+     * # 返回值
+     *
+     * 等价的参数数组
+     */
+    private static String[] agentArgs(String manifest, Path gameDir) {
+        Path state = stateDir(gameDir);
+        List<String> args = new ArrayList<>();
+        args.add("--manifest");
+        args.add(manifest);
+        args.add("--game-dir");
+        args.add(gameDir.toString());
+        args.add("--base-dir");
+        args.add(Main.defaultBaseDir(gameDir).toString());
+        args.add("--state-dir");
+        args.add(state.toString());
+        args.add("--log");
+        args.add(logFile(state).toString());
+        args.add("--threads");
+        args.add(String.valueOf(threadsOf(System.getProperty("mml.serverSync.threads"))));
+        if (truthy(System.getProperty("mml.serverSync.force"))
+                || truthy(System.getenv("MML_SERVER_SYNC_FORCE"))) {
+            args.add("--force");
+        }
+        // 清单拉不到时只记日志，别让服务器掉线锁死启动
+        args.add("--lenient");
+        // 游戏进程里没人守着窗口等勾选：一律全部更新
+        args.add("--no-ask");
+        if (!guiEnabled()) {
+            args.add("--no-gui");
+        }
+        if (!updateEnabled()) {
+            args.add("--no-update");
+        }
+        String skip = skipArgs();
+        if (!skip.isEmpty()) {
+            args.add("--skip");
+            args.add(skip);
+        }
+        String index = updateIndex();
+        if (!index.isEmpty()) {
+            args.add("--update-index");
+            args.add(index);
+        }
+        return args.toArray(new String[0]);
     }
 
     private static Path gameDir() {
@@ -80,6 +118,44 @@ public final class Agent {
         } catch (NumberFormatException e) {
             return 16;
         }
+    }
+
+    /** 是否显示进度窗口；-Dmml.serverSync.gui=false 或 MML_SERVER_SYNC_NO_GUI=1 关掉。 */
+    private static boolean guiEnabled() {
+        String value = System.getProperty("mml.serverSync.gui", "").trim();
+        if (value.isEmpty()) {
+            return !truthy(System.getenv("MML_SERVER_SYNC_NO_GUI"));
+        }
+        return truthy(value);
+    }
+
+    /** 是否检查自更新；-Dmml.serverSync.update=false 或 MML_SERVER_SYNC_NO_UPDATE=1 关掉。 */
+    private static boolean updateEnabled() {
+        String value = System.getProperty("mml.serverSync.update", "").trim();
+        if (value.isEmpty()) {
+            return !truthy(System.getenv("MML_SERVER_SYNC_NO_UPDATE"));
+        }
+        return truthy(value);
+    }
+
+    /** 脚本 / 启动器传来的跳过列表：JVM 属性优先，其次环境变量；逗号分隔 */
+    private static String skipArgs() {
+        String property = System.getProperty("mml.serverSync.skip", "").trim();
+        if (!property.isEmpty()) {
+            return property;
+        }
+        String env = System.getenv("MML_SERVER_SYNC_SKIP");
+        return env == null ? "" : env.trim();
+    }
+
+    /** 自更新索引地址；JVM 属性优先，其次环境变量，空串表示用默认地址。 */
+    private static String updateIndex() {
+        String property = System.getProperty("mml.serverSync.updateIndex", "").trim();
+        if (!property.isEmpty()) {
+            return property;
+        }
+        String env = System.getenv("MML_SERVER_SYNC_INDEX");
+        return env == null ? "" : env.trim();
     }
 
     /** 日志文件路径：JVM 属性可覆盖，默认放在状态目录下。 */

@@ -25,6 +25,12 @@ MML 服务器实例专用更新器，只读取 MML 生成的 `server.json`，同
 - CurseForge API Key 读环境变量 `CURSEFORGE_API_KEY`。
 - 识别到 MML 启动器会直接跳过，不重复同步。
 - 同时下载的文件数默认 16，可用 `-Dmml.serverSync.threads=8` 调整。
+- 同步时默认弹一个 Swing 进度窗口，见「进度窗口」；`-Dmml.serverSync.gui=false` 或
+  `MML_SERVER_SYNC_NO_GUI=1` 关掉。
+- 启动时默认检查自更新，见「自更新」；`-Dmml.serverSync.update=false` 或
+  `MML_SERVER_SYNC_NO_UPDATE=1` 关掉。
+- 可选模组有更新时会弹窗让你勾选，见「可选模组勾选」；脚本可用
+  `-Dmml.serverSync.skip=mods/a.jar,mods/b.jar` 或环境变量 `MML_SERVER_SYNC_SKIP` 跳过指定条目。
 - 同步日志写在 `<状态目录>/mml-server-sync.log`，每行以 `[MML-SERVER-SYNC]` 开头，
   日志文件可用 `-Dmml.serverSync.log=...` 覆盖。
 - 下载时每秒打一条字节进度，例如 `[download] config.zip 43% (9.2/22.0 MB, 6.3 MB/s)`。
@@ -62,6 +68,70 @@ ARG_GAME_BASE_DIR
 Agent 用 `ARG_GAME_DIR` / `ARG_GAME_BASE_DIR` 做路径匹配，不依赖某个开关是否被转发。
 Java 8 没有 `ProcessHandle`，靠第 1–3 条；只要 MML 开着默认用户目录隔离就能识别。
 如果要在 MML 启动器里强行测试更新，把 `MML_SKIP` 设为 `true`。
+
+## 进度窗口
+
+同步时默认弹一个 Swing 窗口：上面一行是包名与版本，中间是进度条，下面一行是当前文件 /
+配置目录，失败时显示原因。同步一结束窗口就关；agent 模式同步完立刻关掉，不拖游戏启动。
+
+- 关掉窗口：命令行 `--no-gui`，JVM 属性 `-Dmml.serverSync.gui=false`，
+  环境变量 `MML_SERVER_SYNC_NO_GUI=1`。
+- 无图形环境（纯终端服务器、headless）自动不显示，不用额外参数。
+
+## 自更新
+
+启动时从 GitHub 拉索引，索引里的版本比当前程序新就下载新 jar，**等本进程退出后自动替换**。
+
+默认索引地址：
+
+```text
+https://raw.githubusercontent.com/Coloryr/mml-server-sync/master/index.json
+```
+
+索引格式（放仓库 `master` 分支根目录，或任意可访问的地址）：
+
+```json
+{
+  "version": "1.1.1",
+  "url": "https://github.com/Coloryr/mml-server-sync/releases/download/v1.1.1/mml-server-sync.jar",
+  "sha1": "可选的 SHA1，填了就校验",
+  "sha256": "可选的 SHA256，填了就校验",
+  "notes": "可选，只写进日志"
+}
+```
+
+- 版本只比数字段：`1.1.1` > `1.1.0`；`-beta` 这类后缀不参与比较。
+- 运行中的 jar 在 Windows 上被 JVM 独占，没法当场覆盖自己：新 jar 先落成
+  `mml-server-sync.jar.new`，再起一个脚本 `mml-server-sync-update-<pid>.cmd`（Linux / macOS
+  是 `.sh`）等本进程退出后改名替换，脚本用完自己删。命令行模式同步结束就替换；
+  agent 模式要等游戏退出。
+- 关掉自更新：`--no-update`、`-Dmml.serverSync.update=false`、`MML_SERVER_SYNC_NO_UPDATE=1`。
+- 换索引地址：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、
+  `MML_SERVER_SYNC_INDEX=...`；本地调试可直接用 `file:///D:/.../index.json`。
+- 任何一步失败只记一行日志，不影响同步本身。
+
+## 可选模组勾选
+
+更新时如果有**可选模组**（清单里带 `Optional`）会新增或换内容，会先弹窗列出来：
+
+- 默认全选，可以单个取消，也可以全选；
+- 没勾的本次不下载，本地旧版本原样留着（可能还带 `.disabled` / `.disable`）；
+- 「取消同步」= 本次一个文件都不动，日志记一条；
+- 勾掉的结果记在 `<状态目录>/skipped.txt`：同一条目发布方没换内容，下次不再问；
+  重新勾上时新版本落地，上次留下的旧文件被清掉。
+
+无交互环境（`--no-gui`、Agent、headless）不弹窗，全部更新；给了 `--skip` / `--skip-file`
+也不再弹窗，按脚本的清单来（脚本优先）。命令行写法：
+
+```text
+--skip=mods/a.jar,mods/b.jar      # 可重复
+--skip-file skip.txt              # UTF-8，一行一个，# 开头忽略
+```
+
+Agent 模式用 `-Dmml.serverSync.skip=...` 或环境变量 `MML_SERVER_SYNC_SKIP`。
+
+`skipped.txt` 是 TSV，一行一条：`内容哈希<TAB>清单路径<TAB>本地保留的旧文件`；
+没有跳过记录时文件会被删掉，不要手改。
 
 ## 要求
 
@@ -144,6 +214,12 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `--quiet` | 少输出 |
 | `--log` | 同步日志文件；默认 `<state-dir>/mml-server-sync.log` |
 | `--threads` | 同时下载的文件数，1-64；默认 16 |
+| `--skip` | 这次不更新的可选模组，清单相对路径；可重复或逗号分隔 |
+| `--skip-file` | 从文件读要跳过的路径，UTF-8，一行一个，`#` 开头忽略 |
+| `--no-gui` | 不显示进度窗口 |
+| `--no-ask` | 不弹可选模组勾选窗，全部更新 |
+| `--no-update` | 不检查自更新 |
+| `--update-index` | 自更新索引地址；默认 GitHub 仓库 master 分支的 `index.json` |
 
 退出码：`0` 成功或版本未变跳过，`1` 同步失败，`2` 参数错误。
 
@@ -187,6 +263,7 @@ if errorlevel 1 exit /b 1
 
 ```text
 <game-dir>/.mml-server-sync/last-manifest.json
+<game-dir>/.mml-server-sync/skipped.txt
 <game-dir>/.mml-server-sync/mml-server-sync.log
 ```
 
@@ -202,3 +279,5 @@ MML 的 `server_instance_ids.json`、`server.json`、`game.json`、`icon.png` �
 - 不会执行 MML 的模组依赖检查、在线信息回写、实例设置回写。
 - 只支持 zip；如果配置包是 tar.gz/7z，需要自行转换或扩展 `Fs.extractZip`。
 - CurseForge 无 URL 且无 API Key 时依赖 CDN 命名规则，可能个别文件失败。
+- 自定义条目（清单里没有项目编号）的模组身份按路径算：换了文件名会被当成新条目，
+  跳过记录也按路径记，下次会重新询问。

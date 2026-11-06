@@ -19,6 +19,18 @@ final class Options {
     boolean lenient;
     /** 同时下载的文件数，1-64 */
     int threads = 16;
+    /** 是否显示 Swing 进度窗口；无图形界面时自动退化为不显示 */
+    boolean gui = true;
+    /** 是否弹可选模组勾选窗；Agent 模式固定关掉，全部更新 */
+    boolean ask = true;
+    /** 是否检查自更新 */
+    boolean update = true;
+    /** 自更新索引地址；空串表示用 {@link Updater#DEFAULT_INDEX} */
+    String updateIndex = "";
+    /** 这次强制跳过的可选模组，清单里的相对路径，`/` 分隔 */
+    final java.util.List<String> skip = new java.util.ArrayList<>();
+    /** --skip-file 指定的文件；null 表示没给 */
+    Path skipFile;
     boolean help;
     boolean version;
 }

@@ -18,6 +18,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.coloryr.mml.serversync.host.Progress;
+
 /** 一次服务器实例更新。 */
 final class Sync {
     /** 禁用后缀：与 MMC / HMCL 一致 */
@@ -28,14 +30,25 @@ final class Sync {
     private final Options options;
     private final Downloader downloader;
     private final Path tempDir;
+    /** 进度窗口；没有窗口时是空实现 */
+    private final Progress ui;
 
-    Sync(Options options) {
+    Sync(Options options, Progress ui) {
         this.options = options;
         this.downloader = new Downloader(options.apiKey, options.quiet);
         this.tempDir = options.stateDir.resolve("tmp");
+        this.ui = ui == null ? Progress.NONE : ui;
     }
 
-    void run() throws IOException {
+    /**
+     * 跑一次同步
+     *
+     * # 返回值
+     *
+     * 一句话结果，给进度窗口与日志用
+     */
+    String run() throws IOException {
+        ui.stage("获取清单");
         String manifestUrl;
         byte[] data;
         Manifest current;
@@ -50,8 +63,10 @@ final class Sync {
                 throw e;
             }
             Log.error("清单获取失败，跳过本次同步: " + e.getMessage());
-            return;
+            return "清单获取失败，已跳过同步";
         }
+        ui.title((current.name.isEmpty() ? "服务器实例" : current.name)
+                + " · " + packVersionOf(current));
 
         Manifest old = loadOld(current);
         if (old == null) {
@@ -61,32 +76,53 @@ final class Sync {
         }
         if (!options.force && sameVersion(old, current)) {
             info("包版本未变（" + current.packVersion + "），跳过同步");
-            return;
+            return "包版本未变，跳过同步";
         }
 
+        ui.stage("检查本地文件");
         validate(current);
         if (old != null) {
             validate(old);
         }
 
-        // 删旧文件之前先记下玩家启用着的条目：可选模组换文件名时按它延续启用状态
-        Set<String> keptEnabled = enabledIdentities(old);
+        // 上次跳过的可选模组：这次发布方没换内容就不再问
+        List<Skipped.Entry> previousSkipped = Skipped.load(options.stateDir);
+        Set<String> skipPaths = new HashSet<>(options.skip);
+        List<Manifest.FileEntry> optionalChanges = changedOptional(current, old, previousSkipped);
+        if (!options.dryRun && skipPaths.isEmpty() && !optionalChanges.isEmpty() && canAsk()) {
+            ui.stage("等待选择可选模组");
+            Set<String> unchecked = askOptionalMods(optionalChanges, old);
+            if (unchecked == null) {
+                info("已取消同步，未改动任何文件");
+                return "已取消同步";
+            }
+            skipPaths.addAll(unchecked);
+        }
+        if (!skipPaths.isEmpty()) {
+            info("本次跳过 " + skipPaths.size() + " 个可选模组");
+        }
 
+        // 删旧文件之前先记下玩家启用着的条目：可选模组换文件名时按它延续启用状态
+        Set<String> keptEnabled = enabledIdentities(old, previousSkipped);
+
+        Set<String> skippedIdentities = skippedIdentities(current, skipPaths);
         List<String> removedDirs = new ArrayList<>();
         Set<String> removedFiles = new HashSet<>();
-        planRemovals(old, current, removedFiles, removedDirs);
+        planRemovals(old, current, removedFiles, removedDirs, skippedIdentities);
         if (options.dryRun) {
+            printOptionalPlan(optionalChanges, skipPaths);
             printPlan(current, old, removedFiles, removedDirs);
-            return;
+            return "只打印了同步计划，未改动文件";
         }
         if (!options.noDelete) {
             applyRemovals(removedFiles, removedDirs);
         } else {
             info("--no-delete：跳过 " + removedFiles.size() + " 个文件、" + removedDirs.size() + " 个目录的删除");
         }
+        cleanKept(previousSkipped, old, current, skipPaths, skippedIdentities);
 
         boolean needBase = current.base != null && (old == null || old.base == null);
-        List<PlannedFile> files = changedFiles(current, keptEnabled);
+        List<PlannedFile> files = changedFiles(current, keptEnabled, skipPaths);
         List<ArchivePlan> archives = archivePlans(old, current, removedDirs);
         int archiveCount = 0;
         for (ArchivePlan plan : archives) {
@@ -97,6 +133,8 @@ final class Sync {
         int total = files.size() + archiveCount + (needBase ? 1 : 0);
         info("需要处理 " + total + " 项（模组/文件 " + files.size() + "，配置压缩包 "
                 + archiveCount + "，基础包 " + (needBase ? 1 : 0) + "）");
+        // 下载一步、解压一步，进度条按两步走
+        ui.total(total + archiveCount + (needBase ? 1 : 0));
 
         Files.createDirectories(tempDir);
         Path baseTemp = null;
@@ -127,12 +165,15 @@ final class Sync {
             downloaded.add(new ArchivePlan(plan.item, temp, false));
         }
 
-        downloadAll(tasks, total);
+        ui.stage("下载文件");
+        int done = downloadAll(tasks, total);
 
         if (baseTemp != null) {
+            ui.stage("解压基础包");
             Fs.extractZip(baseTemp, options.baseDir, true);
             Files.deleteIfExists(baseTemp);
             info("基础包已解压到 " + options.baseDir);
+            ui.step(++done, current.base.file);
         }
 
         downloaded.sort(Comparator.comparingInt((ArchivePlan plan) -> depth(plan.item.dir)));
@@ -144,10 +185,12 @@ final class Sync {
             Fs.extractZip(plan.temp, target, false);
             Files.deleteIfExists(plan.temp);
             info("解压配置: " + plan.item.dir);
+            ui.step(++done, plan.item.dir);
         }
 
         saveState(data);
-        info("同步完成，当前包版本 " + current.packVersion);
+        Skipped.save(options.stateDir, skippedMarkers(current, old, previousSkipped, skipPaths));
+        return "同步完成，当前包版本 " + current.packVersion;
     }
 
     /** 清单的包版本，空串按「未标注」显示。 */
@@ -198,7 +241,7 @@ final class Sync {
     }
 
     private void planRemovals(Manifest old, Manifest current, Set<String> files,
-                              List<String> dirs) {
+                              List<String> dirs, Set<String> skippedIdentities) {
         if (old == null) {
             return;
         }
@@ -207,6 +250,10 @@ final class Sync {
             byIdentity.put(item.identity(), item);
         }
         for (Manifest.FileEntry item : old.files) {
+            // 这次不更新的条目：旧文件留着，别删完又不装新的
+            if (skippedIdentities.contains(item.identity())) {
+                continue;
+            }
             Manifest.FileEntry replacement = byIdentity.get(item.identity());
             if (replacement == null || !replacement.path.equals(item.path)) {
                 files.add(item.path);
@@ -245,10 +292,14 @@ final class Sync {
      * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
      * 本地没有、清单又标了可选时写在禁用名下，装完默认不加载。
      */
-    private List<PlannedFile> changedFiles(Manifest current, Set<String> keptEnabled)
-            throws IOException {
+    private List<PlannedFile> changedFiles(Manifest current, Set<String> keptEnabled,
+                                           Set<String> skipPaths) throws IOException {
         List<PlannedFile> out = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
+            // 这次跳过的条目不下载，本地旧版本原样留着
+            if (skipPaths.contains(item.path)) {
+                continue;
+            }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
             Path existing = existingVariant(target);
             if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
@@ -269,7 +320,7 @@ final class Sync {
      * 可选模组换文件名时按项目号延续启用状态：玩家启用过的，更新版本后不要重新禁用。
      * 必须在删除旧文件之前调用，否则读不到本地的启用 / 禁用状态。
      */
-    private Set<String> enabledIdentities(Manifest old) {
+    private Set<String> enabledIdentities(Manifest old, List<Skipped.Entry> previousSkipped) {
         Set<String> out = new HashSet<>();
         if (old == null) {
             return out;
@@ -282,6 +333,10 @@ final class Sync {
                 continue;
             }
             Path existing = existingVariant(target);
+            // 上次跳过留下的旧版本在别的文件名下，按跳过记录找它现在的状态
+            if (existing == null) {
+                existing = keptFile(previousSkipped, item.path);
+            }
             if (existing != null && !isDisabled(existing)) {
                 out.add(item.identity());
             }
@@ -317,6 +372,249 @@ final class Sync {
     /** 给文件名追加后缀，如 `mods/a.jar` → `mods/a.jar.disabled` */
     private static Path withSuffix(Path target, String suffix) {
         return target.resolveSibling(target.getFileName().toString() + suffix);
+    }
+
+    /**
+     * 这次会变、需要让玩家确认的可选模组
+     *
+     * 只收 `Optional` 条目，并且要同时满足「清单里是新增或内容变了」与「本地确实要下载」，
+     * 避免列出来之后因为本地哈希一致根本不下载。上次跳过且发布方没换内容的也不再列。
+     *
+     * - `current`: 远程清单
+     * - `old`: 本地旧清单，没有时传 null
+     * - `previous`: 上次的跳过记录
+     *
+     * # 返回值
+     *
+     * 会变的可选条目，顺序与清单一致
+     */
+    private List<Manifest.FileEntry> changedOptional(Manifest current, Manifest old,
+                                                     List<Skipped.Entry> previous) throws IOException {
+        List<Manifest.FileEntry> out = new ArrayList<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (!item.optional) {
+                continue;
+            }
+            if (skippedBefore(previous, item)) {
+                continue;
+            }
+            Manifest.FileEntry before = findByIdentity(old, item.identity());
+            if (before != null && before.hasSameContent(item)) {
+                continue;
+            }
+            Path existing = existingVariant(Fs.resolveSafe(options.gameDir, item.path));
+            if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
+                continue;
+            }
+            out.add(item);
+        }
+        return out;
+    }
+
+    /** 旧清单里同一身份的条目；没有时返回 null */
+    private static Manifest.FileEntry findByIdentity(Manifest manifest, String identity) {
+        if (manifest == null) {
+            return null;
+        }
+        for (Manifest.FileEntry item : manifest.files) {
+            if (item.identity().equals(identity)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    /** 上次跳过的是不是同一条内容：路径与哈希都对得上才算 */
+    private static boolean skippedBefore(List<Skipped.Entry> previous, Manifest.FileEntry item) {
+        String hash = contentHash(item);
+        for (Skipped.Entry entry : previous) {
+            if (entry.file.equals(item.path) && entry.sha1.equalsIgnoreCase(hash)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 条目的内容哈希：SHA1 优先，没有时用 SHA256 */
+    private static String contentHash(Manifest.FileEntry item) {
+        return item.sha1.isEmpty() ? item.sha256 : item.sha1;
+    }
+
+    /** 有界面、允许交互、也真的弹得出来时才弹窗 */
+    private boolean canAsk() {
+        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless()
+                && ui instanceof ProgressWindow;
+    }
+
+    /** 组装并弹出勾选窗，返回未勾选的路径 */
+    private Set<String> askOptionalMods(List<Manifest.FileEntry> items, Manifest old)
+            throws IOException {
+        javax.swing.JFrame parent = ((ProgressWindow) ui).frame();
+        List<OptionalModsDialog.Row> rows = new ArrayList<>(items.size());
+        for (Manifest.FileEntry item : items) {
+            Manifest.FileEntry before = findByIdentity(old, item.identity());
+            Path existing = existingVariant(Fs.resolveSafe(options.gameDir, item.path));
+            String name = item.fileName();
+            String oldName = existing == null || existing.getFileName().toString().equals(name)
+                    ? "" : existing.getFileName().toString();
+            rows.add(new OptionalModsDialog.Row(item.path, name, before == null,
+                    existing != null && !isDisabled(existing), oldName));
+        }
+        return OptionalModsDialog.ask(parent, rows);
+    }
+
+    /** 本次跳过的条目的身份，用于保护旧文件不被删除 */
+    private static Set<String> skippedIdentities(Manifest current, Set<String> skipPaths) {
+        Set<String> out = new HashSet<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (skipPaths.contains(item.path)) {
+                out.add(item.identity());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 上次跳过、这次重新勾上的条目：清掉当时留下的旧文件
+     *
+     * 新版本还用同一个路径时留给下载覆盖，不先删。
+     *
+     * - `previous`: 上次的跳过记录
+     * - `old`: 本地旧清单，用来把记录里的路径换回条目身份
+     * - `current`: 远程清单
+     * - `skipPaths`: 这次仍然跳过的路径
+     * - `skippedIdentities`: 这次跳过的条目身份
+     */
+    private void cleanKept(List<Skipped.Entry> previous, Manifest old, Manifest current,
+                           Set<String> skipPaths, Set<String> skippedIdentities) {
+        if (options.noDelete) {
+            return;
+        }
+        Set<String> currentPaths = new HashSet<>();
+        for (Manifest.FileEntry item : current.files) {
+            currentPaths.add(item.path);
+        }
+        for (Skipped.Entry entry : previous) {
+            // 同一个模组这次仍然跳过：换了文件名也继续留着旧文件
+            if (skipPaths.contains(entry.file)
+                    || skippedIdentities.contains(identityOf(old, entry.file))) {
+                continue;
+            }
+            String kept = entry.kept;
+            if (kept.isEmpty() || currentPaths.contains(kept)) {
+                continue;
+            }
+            try {
+                Path path = Fs.resolveSafe(options.gameDir, kept);
+                if (existingVariant(path) == null) {
+                    continue;
+                }
+                Fs.deleteFile(path);
+                info("清理上次跳过的旧文件: " + kept);
+            } catch (IOException e) {
+                info("清理旧文件失败 " + kept + "：" + e.getMessage());
+            }
+        }
+    }
+
+    /** 清单里某条路径的身份；清单里没有时退回路径本身 */
+    private static String identityOf(Manifest manifest, String path) {
+        if (manifest != null) {
+            for (Manifest.FileEntry item : manifest.files) {
+                if (item.path.equals(path)) {
+                    return item.identity();
+                }
+            }
+        }
+        return "path:" + path;
+    }
+
+    /** 跳过记录里这条留下的旧文件；没有或读不到时返回 null */
+    private Path keptFile(List<Skipped.Entry> previous, String path) {
+        for (Skipped.Entry entry : previous) {
+            if (!entry.file.equals(path) || entry.kept.isEmpty()) {
+                continue;
+            }
+            try {
+                Path kept = Fs.resolveSafe(options.gameDir, entry.kept);
+                if (Files.isRegularFile(kept)) {
+                    return kept;
+                }
+            } catch (IOException ignored) {
+                // 记录里的路径不合法就当没有
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 本次跳过的条目，写进 skipped.txt
+     *
+     * kept 先按旧清单里同身份条目的本地文件取，找不到再按新路径取；记实际文件名，
+     * 禁用中的那份带后缀。
+     *
+     * - `current`: 远程清单
+     * - `old`: 本地旧清单
+     * - `skipPaths`: 这次跳过的路径
+     *
+     * # 返回值
+     *
+     * 要落盘的跳过记录
+     */
+    private List<Skipped.Entry> skippedMarkers(Manifest current, Manifest old,
+                                               List<Skipped.Entry> previous,
+                                               Set<String> skipPaths) {
+        List<Skipped.Entry> out = new ArrayList<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (!skipPaths.contains(item.path)) {
+                continue;
+            }
+            Manifest.FileEntry before = findByIdentity(old, item.identity());
+            out.add(new Skipped.Entry(contentHash(item), item.path,
+                    keptRelative(before, item, previous)));
+        }
+        return out;
+    }
+
+    /** 本地保留的旧文件相对游戏目录的写法；没有时返回空串 */
+    private String keptRelative(Manifest.FileEntry before, Manifest.FileEntry item,
+                                List<Skipped.Entry> previous) {
+        Path found = existingVariantQuiet(before == null ? null : before.path);
+        if (found == null) {
+            // 上次已经跳过、这次换了文件名：本地那份记在跳过记录里
+            found = keptFile(previous, before == null ? item.path : before.path);
+        }
+        if (found == null) {
+            found = existingVariantQuiet(item.path);
+        }
+        if (found == null) {
+            return "";
+        }
+        try {
+            return options.gameDir.toAbsolutePath().normalize()
+                    .relativize(found.toAbsolutePath().normalize()).toString().replace('\\', '/');
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    private Path existingVariantQuiet(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        try {
+            return existingVariant(Fs.resolveSafe(options.gameDir, path));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** --dry-run 时把会变的可选模组与跳过项打进计划 */
+    private void printOptionalPlan(List<Manifest.FileEntry> optionalChanges, Set<String> skipPaths) {
+        info("会变的可选模组 " + optionalChanges.size() + " 个");
+        for (Manifest.FileEntry item : optionalChanges) {
+            info("  " + (skipPaths.contains(item.path) ? "- 跳过 " : "- 更新 ") + item.path);
+        }
     }
 
     private List<ArchivePlan> archivePlans(Manifest old, Manifest current, List<String> removedDirs) {
@@ -403,10 +701,11 @@ final class Sync {
         Files.deleteIfExists(temp);
     }
 
-    private void progress(int done, int total) {
+    private void progress(int done, int total, String detail) {
         if (!options.quiet && total > 0) {
             Log.info("[progress] " + done + "/" + total);
         }
+        ui.step(done, detail);
     }
 
     private void info(String message) {
@@ -422,10 +721,14 @@ final class Sync {
      *
      * - `tasks`: 待下载条目
      * - `total`: 条目总数，进度按它报
+     *
+     * # 返回值
+     *
+     * 实际完成的条目数
      */
-    private void downloadAll(List<DownloadTask> tasks, int total) throws IOException {
+    private int downloadAll(List<DownloadTask> tasks, int total) throws IOException {
         if (tasks.isEmpty()) {
-            return;
+            return 0;
         }
         int threads = Math.max(1, Math.min(options.threads, tasks.size()));
         ExecutorService pool = Executors.newFixedThreadPool(threads, runnable -> {
@@ -442,7 +745,8 @@ final class Sync {
                             ? task.url
                             : downloader.resolveFile(task.entry);
                     downloader.download(url, task.target, task.sha1, task.sha256);
-                    progress(finished.incrementAndGet(), total);
+                    progress(finished.incrementAndGet(), total,
+                            task.target.getFileName().toString());
                     return null;
                 }));
             }
@@ -463,6 +767,7 @@ final class Sync {
         } finally {
             pool.shutdownNow();
         }
+        return finished.get();
     }
 
     /** 需要下载的一个文件：清单条目与落盘位置 */

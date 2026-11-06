@@ -166,6 +166,30 @@ final class Manifest {
             return pid.isEmpty() ? "path:" + path : "pid:" + pid;
         }
 
+        /**
+         * 两条条目的内容是否一致
+         *
+         * SHA1 优先，没有时退回 SHA256；两边都没有校验值按内容不同处理。
+         *
+         * - `other`: 另一条清单条目
+         *
+         * # 返回值
+         *
+         * 内容一致时返回 true
+         */
+        boolean hasSameContent(FileEntry other) {
+            if (other == null) {
+                return false;
+            }
+            if (!sha1.isEmpty() && !other.sha1.isEmpty()) {
+                return sha1.equalsIgnoreCase(other.sha1);
+            }
+            if (!sha256.isEmpty() && !other.sha256.isEmpty()) {
+                return sha256.equalsIgnoreCase(other.sha256);
+            }
+            return false;
+        }
+
         String fileName() {
             int i = path.lastIndexOf('/');
             return i >= 0 ? path.substring(i + 1) : path;
