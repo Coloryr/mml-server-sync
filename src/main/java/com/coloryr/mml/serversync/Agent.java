@@ -75,8 +75,10 @@ public final class Agent {
         }
         // 清单拉不到时只记日志，别让服务器掉线锁死启动
         args.add("--lenient");
-        // 游戏进程里没人守着窗口等勾选：一律全部更新
-        args.add("--no-ask");
+        // 启动场景窗口前就有人等着：默认允许自选模组勾选窗，无人值守时显式关掉
+        if (!askEnabled()) {
+            args.add("--no-ask");
+        }
         if (!guiEnabled()) {
             args.add("--no-gui");
         }
@@ -136,6 +138,15 @@ public final class Agent {
             return !truthy(System.getenv("MML_SERVER_SYNC_NO_UPDATE"));
         }
         return truthy(value);
+    }
+
+    /** 是否允许弹自选模组勾选窗；-Dmml.serverSync.noAsk=true 或 MML_SERVER_SYNC_NO_ASK=1 关掉。 */
+    private static boolean askEnabled() {
+        String value = System.getProperty("mml.serverSync.noAsk", "").trim();
+        if (value.isEmpty()) {
+            return !truthy(System.getenv("MML_SERVER_SYNC_NO_ASK"));
+        }
+        return !truthy(value);
     }
 
     /** 脚本 / 启动器传来的跳过列表：JVM 属性优先，其次环境变量；逗号分隔 */
