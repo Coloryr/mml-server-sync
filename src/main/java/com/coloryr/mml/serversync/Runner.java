@@ -247,7 +247,7 @@ public final class Runner {
         System.out.println("  --no-gui            不显示同步进度窗口");
         System.out.println("  --no-ask            不弹可选模组勾选窗，全部更新");
         System.out.println("  --no-update         不检查自更新");
-        System.out.println("  --update-index      自更新索引地址；默认 GitHub 仓库 master 分支的 index.json");
+        System.out.println("  --update-index      自更新索引地址；默认 https://www.coloryr.com/mml-server-sync/index.json");
         System.out.println("  --quiet             少输出");
         System.out.println("  --version           显示版本");
         System.out.println("  --help, -h          显示帮助");

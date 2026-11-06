@@ -23,9 +23,9 @@ import java.util.Map;
  * 整个过程不影响同步：任何一步失败只记一行日志。
  */
 final class Updater {
-    /** 默认索引：仓库 master 分支根目录的 index.json */
+    /** 默认索引：与更新用的 jar 放在同一个目录下 */
     static final String DEFAULT_INDEX =
-            "https://raw.githubusercontent.com/Coloryr/mml-server-sync/master/index.json";
+            "https://www.coloryr.com/mml-server-sync/index.json";
 
     /** 更新包目录名，放在 jar 同目录下 */
     private static final String UPDATE_DIR = "update";
@@ -95,7 +95,8 @@ final class Updater {
             return;
         }
         String version = Json.string(root, "version", "Version").trim();
-        String url = Json.string(root, "url", "Url").trim();
+        // 允许相对地址：index.json 与 jar 放同一个目录时，整包传到哪都能用
+        String url = resolveUrl(index, Json.string(root, "url", "Url").trim());
         String sha1 = Json.string(root, "sha1", "Sha1").trim();
         String sha256 = Json.string(root, "sha256", "Sha256").trim();
         if (version.isEmpty() || url.isEmpty()) {
@@ -240,6 +241,28 @@ final class Updater {
             }
         } catch (Exception ignored) {
             // 清理失败不影响更新
+        }
+    }
+
+    /**
+     * 把索引里的下载地址补成绝对地址
+     *
+     * - `base`: 索引自身的地址
+     * - `url`: 索引里写的地址；已是绝对地址时原样返回
+     *
+     * # 返回值
+     *
+     * 绝对地址；解析失败时返回原值
+     */
+    private static String resolveUrl(String base, String url) {
+        if (url == null || url.isEmpty()
+                || url.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")) {
+            return url == null ? "" : url;
+        }
+        try {
+            return new URL(new URL(base), url).toString();
+        } catch (IOException e) {
+            return url;
         }
     }
 

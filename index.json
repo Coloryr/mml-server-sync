@@ -1,7 +1,0 @@
-{
-  "version": "1.2.0",
-  "url": "https://github.com/Coloryr/mml-server-sync/releases/download/v1.2.0/mml-server-sync.jar",
-  "sha1": "",
-  "sha256": "",
-  "notes": "当前版本；发新 jar 时把 version 改高、url 换成新地址，并把 sha1 / sha256 填上"
-}

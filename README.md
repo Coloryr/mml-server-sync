@@ -27,8 +27,8 @@ MML 服务器实例专用更新器，只读取 MML 生成的 `server.json`，同
 - 同时下载的文件数默认 16，可用 `-Dmml.serverSync.threads=8` 调整。
 - 同步时默认弹一个 Swing 进度窗口，见「进度窗口」；`-Dmml.serverSync.gui=false` 或
   `MML_SERVER_SYNC_NO_GUI=1` 关掉。
-- 启动时默认检查自更新，见「自更新」；`-Dmml.serverSync.update=false` 或
-  `MML_SERVER_SYNC_NO_UPDATE=1` 关掉。
+- 启动时检查自更新，默认索引 `https://www.coloryr.com/mml-server-sync/index.json`；
+  `--no-update` / `-Dmml.serverSync.update=false` / `MML_SERVER_SYNC_NO_UPDATE=1` 关掉。
 - 可选模组有更新时会弹窗让你勾选，见「可选模组勾选」；脚本可用
   `-Dmml.serverSync.skip=mods/a.jar,mods/b.jar` 或环境变量 `MML_SERVER_SYNC_SKIP` 跳过指定条目。
 - 同步日志写在 `<状态目录>/mml-server-sync.log`，每行以 `[MML-SERVER-SYNC]` 开头，
@@ -80,34 +80,30 @@ Java 8 没有 `ProcessHandle`，靠第 1–3 条；只要 MML 开着默认用户
 
 ## 自更新
 
-启动时从 GitHub 拉索引，索引里的版本比当前程序新就下载新 jar，**等本进程退出后自动替换**。
+启动时检查索引（默认 `https://www.coloryr.com/mml-server-sync/index.json`，与更新用的
+jar 放在同一个目录）。版本比当前程序新，就把新 jar 下到「当前 jar 同目录/update/」下，
+**下一次启动**由独立类加载器加载它；本次运行仍是原版本，不会覆盖正在用的 jar。
 
-默认索引地址：
-
-```text
-https://raw.githubusercontent.com/Coloryr/mml-server-sync/master/index.json
-```
-
-索引格式（放仓库 `master` 分支根目录，或任意可访问的地址）：
+索引格式：
 
 ```json
 {
-  "version": "1.1.1",
-  "url": "https://github.com/Coloryr/mml-server-sync/releases/download/v1.1.1/mml-server-sync.jar",
+  "version": "1.2.1",
+  "url": "mml-server-sync-1.2.1.jar",
   "sha1": "可选的 SHA1，填了就校验",
   "sha256": "可选的 SHA256，填了就校验",
   "notes": "可选，只写进日志"
 }
 ```
 
-- 版本只比数字段：`1.1.1` > `1.1.0`；`-beta` 这类后缀不参与比较。
-- 运行中的 jar 在 Windows 上被 JVM 独占，没法当场覆盖自己：新 jar 先落成
-  `mml-server-sync.jar.new`，再起一个脚本 `mml-server-sync-update-<pid>.cmd`（Linux / macOS
-  是 `.sh`）等本进程退出后改名替换，脚本用完自己删。命令行模式同步结束就替换；
-  agent 模式要等游戏退出。
+- `url` 可以写相对地址（相对索引自身的地址解析）：index.json 与 jar 放同一个目录，
+  整包传到哪个路径都能用。
+- 版本只比数字段：`1.2.1` > `1.2.0`；`-beta` 这类后缀不参与比较。
+- 加载前会校验：jar 结构 / CRC、启动清单与入口类、class 版本、以及下载时记下的哈希
+  （`<jar>.sha1` / `.sha256` 旁车文件）；不通过就跳过并删掉坏包。
+- 换索引：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、
+  `MML_SERVER_SYNC_INDEX=...`；本地调试可用 `file:///D:/.../index.json`。
 - 关掉自更新：`--no-update`、`-Dmml.serverSync.update=false`、`MML_SERVER_SYNC_NO_UPDATE=1`。
-- 换索引地址：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、
-  `MML_SERVER_SYNC_INDEX=...`；本地调试可直接用 `file:///D:/.../index.json`。
 - 任何一步失败只记一行日志，不影响同步本身。
 
 ## 可选模组勾选
@@ -219,7 +215,7 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `--no-gui` | 不显示进度窗口 |
 | `--no-ask` | 不弹可选模组勾选窗，全部更新 |
 | `--no-update` | 不检查自更新 |
-| `--update-index` | 自更新索引地址；默认 GitHub 仓库 master 分支的 `index.json` |
+| `--update-index` | 换自更新索引地址；默认 `https://www.coloryr.com/mml-server-sync/index.json` |
 
 退出码：`0` 成功或版本未变跳过，`1` 同步失败，`2` 参数错误。
 
