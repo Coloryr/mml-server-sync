@@ -46,7 +46,7 @@ Premain-Class: com.coloryr.mml.serversync.Agent
 
 ```text
 build/release/index.json
-build/release/mml-server-sync-1.4.3.jar
+build/release/mml-server-sync-1.4.4.jar
 ```
 
 - `version` / `url` 取 `build.gradle` 的版本号，jar 名固定为 `mml-server-sync-<version>.jar`；
@@ -80,8 +80,8 @@ build/release/mml-server-sync-1.4.3.jar
 
 ```json
 {
-  "version": "1.4.3",
-  "url": "mml-server-sync-1.4.3.jar",
+  "version": "1.4.4",
+  "url": "mml-server-sync-1.4.4.jar",
   "sha1": "可选的 SHA1，填了就校验",
   "sha256": "可选的 SHA256，填了就校验",
   "notes": "可选，只写进日志"
@@ -90,7 +90,7 @@ build/release/mml-server-sync-1.4.3.jar
 
 - `url` 可以写相对地址（相对索引自身的地址解析）：index.json 与 jar 放同一个目录，
   整包传到哪个路径都能用。
-- 版本只比数字段：`1.4.3 > 1.4.2 > 1.4.1`；`-beta` 这类后缀不参与比较。
+- 版本只比数字段：`1.4.4 > 1.4.3 > 1.4.2`；`-beta` 这类后缀不参与比较。
 - 加载前会校验：jar 结构 / CRC、启动清单与入口类、class 版本、以及下载时记下的哈希；
   不通过就跳过并删掉坏包，回退到当前版本。
 - 换索引：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、

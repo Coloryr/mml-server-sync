@@ -202,13 +202,35 @@ public final class Agent {
         if (truthy(System.getProperty("mml.launcher"))) {
             return true;
         }
+        // MML 1.4.0+ 会显式写 MML_LAUNCHER=1（见 game_launch.rs 的 mml_env）
+        if (truthy(System.getenv("MML_LAUNCHER"))) {
+            return true;
+        }
         if (hasMmlGameArgs(gameDir)) {
             return true;
+        }
+        // FCL / PojavLauncher 等安卓启动器会把 XDG_DATA_HOME 放进版本目录，
+        // 与 MML 的「用户目录隔离」特征撞车，先排除，避免误跳过同步
+        if (isAndroidLauncher()) {
+            return false;
         }
         if (isolatedToInstance(gameDir)) {
             return true;
         }
         return parentLooksLikeMml();
+    }
+
+    /** FCL / PojavLauncher 等安卓启动器的环境特征；MML 是桌面端，不会带这些变量 */
+    private static boolean isAndroidLauncher() {
+        String[] keys = {"FCL_NATIVEDIR", "FCL_VERSION_CODE", "POJAV_NATIVEDIR",
+                "POJAV_RENDERER", "MOD_ANDROID_RUNTIME", "DALVIK_JAVAVM"};
+        for (String key : keys) {
+            String value = System.getenv(key);
+            if (value != null && !value.trim().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** MML 游戏进程会带 ARG_GAME_DIR / ARG_GAME_BASE_DIR 等启动参数环境变量。 */
@@ -243,20 +265,8 @@ public final class Agent {
                 || samePath(System.getProperty("user.home"), gameDir)) {
             return true;
         }
-        String[] prefixes = {"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"};
-        for (String key : prefixes) {
-            String value = System.getenv(key);
-            if (value != null && !value.trim().isEmpty()) {
-                try {
-                    Path path = Paths.get(value).toAbsolutePath().normalize();
-                    if (path.startsWith(instance)) {
-                        return true;
-                    }
-                } catch (RuntimeException ignored) {
-                    // 非法环境变量按不匹配处理
-                }
-            }
-        }
+        // 不再按 XDG_* 前缀判定：FCL 等安卓启动器也会把 XDG_DATA_HOME 放进版本目录。
+        // MML 隔离时一定会把上面的 HOME / USERPROFILE / APPDATA / LOCALAPPDATA 指到实例根目录。
         return false;
     }
 

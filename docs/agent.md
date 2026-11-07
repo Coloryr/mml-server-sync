@@ -54,17 +54,21 @@
 
 先看 `MML_SKIP`：为真时整段检查都不做，直接按非 MML 启动器同步。否则按顺序检查：
 
-1. JVM 属性 `-Dmml.launcher=1`；
+1. JVM 属性 `-Dmml.launcher=1`，或环境变量 `MML_LAUNCHER=1`（MML 1.4.0+ 默认写入）；
 2. **MML 自己写的 ARG_ 启动变量**：
    - `ARG_GAME_DIR` 与当前游戏目录一致；
    - `ARG_GAME_BASE_DIR` 与游戏目录的父目录一致；
    - `ARG_GAME_UUID` / `ARG_GAME_NAME` 非空时进一步确认。
 3. **MML 的默认用户目录隔离**：
-   - `HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA` 指向实例根目录；
-   - `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` 位于实例根目录下；
+   - `HOME`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`（以及 `user.home`）
+     精确指向实例根目录；
    - agent 用「游戏目录的父目录」和这些环境变量比对。
 4. Java 9+ 反射读取父进程命令行，匹配 `mml-gui` / `ModernMinecraftLauncher` /
    `mml_launcher`。
+
+安卓启动器（FCL / PojavLauncher 等）会带 `FCL_*` / `POJAV_*` / `MOD_ANDROID_RUNTIME` /
+`DALVIK_JAVAVM` 中的环境变量，这时直接按非 MML 处理；`XDG_*` 不再作为判据——
+这些启动器会把 `XDG_DATA_HOME` 放进版本目录，按前缀判断会误判成 MML。
 
 MML 启动游戏时会写入：
 
