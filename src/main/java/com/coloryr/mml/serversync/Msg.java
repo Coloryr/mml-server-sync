@@ -211,9 +211,12 @@ enum Msg {
     CANCEL_AFTER_ENDED("已按用户要求结束游戏", "Game ended by user request"),
     CANCEL_UPDATE("取消更新", "Cancel update"),
     CANCELLING("正在取消…", "Cancelling..."),
+    CANCELLED("已取消", "Cancelled"),
     CANCEL_DIALOG_TITLE("取消更新", "Cancel update"),
-    CANCEL_DIALOG_QUESTION("要跳过本次更新直接启动游戏，还是结束游戏？", "Skip this update and start the game, or end the game?"),
+    CANCEL_DIALOG_QUESTION("本次更新已暂停：继续更新、跳过本次更新，还是结束游戏？", "The update is paused: continue, skip this update, or end the game?"),
     CANCEL_DIALOG_SKIP("跳过更新", "Skip update"),
+    CANCEL_DIALOG_CONTINUE("继续更新", "Continue update"),
+    UPDATE_PAUSED_WAITING("已暂停，等待选择", "Paused, waiting for a choice"),
     UPDATE_CANCELLED_MIDWAY("更新已取消，可能有文件已写入；下次启动会补齐", "Update cancelled; some files may have been written. The next launch will finish it."),
     FAILED_TO_OPEN_THE_CANCEL_DIALOG("取消确认框打开失败: %s", "Failed to open the cancel dialog: %s");
 

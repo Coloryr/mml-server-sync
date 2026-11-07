@@ -24,8 +24,6 @@ import java.util.zip.ZipException;
 final class Downloader {
     /** 字节进度两条日志的最小间隔，单位纳秒 */
     private static final long REPORT_INTERVAL = 1_000_000_000L;
-    /** 拉清单时每读这么多字节看一眼取消状态 */
-    private static final long CANCEL_CHECK_INTERVAL = 256 * 1024L;
 
     private final String apiKey;
     private final boolean quiet;
@@ -154,8 +152,9 @@ final class Downloader {
                  OutputStream output = Files.newOutputStream(temp)) {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
-                long lastCancelCheck = 0;
                 while ((read = input.read(buffer)) >= 0) {
+                    // 每读一块就查一次：取消要立刻停，暂停要立刻停住（不再等 1MB 边界）
+                    Cancels.check();
                     output.write(buffer, 0, read);
                     if (!sha1.isEmpty()) {
                         sha1Digest.update(buffer, 0, read);
@@ -164,11 +163,6 @@ final class Downloader {
                         sha256Digest.update(buffer, 0, read);
                     }
                     done += read;
-                    // 大文件下到一半也要能停：每 1MB 看一眼取消状态
-                    if (done - lastCancelCheck >= 1048576L) {
-                        lastCancelCheck = done;
-                        Cancels.check();
-                    }
                     long now = System.nanoTime();
                     if (!quiet && now - lastTime >= REPORT_INTERVAL) {
                         report(target, done, total, done - lastDone, now - lastTime);
@@ -336,16 +330,12 @@ final class Downloader {
         long done = 0;
         long lastDone = 0;
         long lastTime = System.nanoTime();
-        long lastCancel = 0;
         int read;
         while ((read = input.read(buffer)) >= 0) {
+            // 清单也可能几 MB：每读一块就查一次，取消与暂停都能立刻生效
+            Cancels.check();
             out.write(buffer, 0, read);
             done += read;
-            // 清单可能有几 MB：取消要能很快生效
-            if (done - lastCancel >= CANCEL_CHECK_INTERVAL) {
-                lastCancel = done;
-                Cancels.check();
-            }
             long now = System.nanoTime();
             if (now - lastTime >= REPORT_INTERVAL) {
                 if (verbose) {

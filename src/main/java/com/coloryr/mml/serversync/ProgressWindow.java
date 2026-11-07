@@ -3,6 +3,7 @@ package com.coloryr.mml.serversync;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -24,8 +25,8 @@ import com.coloryr.mml.serversync.host.Progress;
  * 同步进度窗口。
  *
  * 同步经常跑在游戏进程的 premain 里：窗口要在游戏启动前出现、同步一结束就消失。
- * 除了画阶段与步骤，还带一个「取消更新」：点它先问一句跳过本次更新还是结束游戏，
- * 真正的停止由主流程在安全点检查系统属性后执行。
+ * 除了画阶段与步骤，还带一个「取消更新」：点下去先暂停同步，再问一句继续更新、
+ * 跳过本次更新还是结束游戏；真正的停止由主流程在安全点检查系统属性后执行。
  *
  * 所有更新方法都可以从任意线程调用，内部统一排到 Swing 事件线程。
  */
@@ -45,6 +46,8 @@ final class ProgressWindow implements Progress {
     private final JButton optionalButton;
     /** 已经点过取消，别重复问 */
     private boolean cancelRequested;
+    /** 玩家已选「跳过 / 结束」：进度停在原地，不再跟着后台收尾往前走 */
+    private volatile boolean cancelling;
     /** 「自选模组」点击回调，由同步流程安装；弹窗在回调里打开，阻塞在本回调直到玩家确认 */
     private volatile Runnable optionalHandler;
     /** 结束之后不再更新界面 */
@@ -92,10 +95,13 @@ final class ProgressWindow implements Progress {
         optionalButton = new JButton(Text.of(Msg.OPTIONAL_MODS_BUTTON));
         optionalButton.setEnabled(false);
         optionalButton.addActionListener(event -> requestOptionalManage());
-        JPanel south = new JPanel(new BorderLayout());
-        south.add(detailLabel, BorderLayout.WEST);
-        south.add(optionalButton, BorderLayout.CENTER);
-        south.add(cancelButton, BorderLayout.EAST);
+        // 文件名自己占一行：长路径不会再把「自选模组」按钮挤来挤去；按钮单独一行靠右
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.add(optionalButton);
+        buttons.add(cancelButton);
+        JPanel south = new JPanel(new BorderLayout(0, 6));
+        south.add(detailLabel, BorderLayout.NORTH);
+        south.add(buttons, BorderLayout.SOUTH);
 
         JPanel root = new JPanel(new BorderLayout(0, 8));
         root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
@@ -221,7 +227,10 @@ final class ProgressWindow implements Progress {
             if (!bar.isIndeterminate()) {
                 bar.setValue(Math.max(0, Math.min(done, bar.getMaximum())));
             }
-            detailLabel.setText(detail == null || detail.isEmpty() ? " " : detail);
+            String text = detail == null || detail.isEmpty() ? " " : detail;
+            detailLabel.setText(text);
+            // 路径太长会被截断，悬停时给出完整名字
+            detailLabel.setToolTipText(text.trim().isEmpty() ? null : text);
         });
     }
 
@@ -236,15 +245,20 @@ final class ProgressWindow implements Progress {
             }
             cancelButton.setEnabled(false);
             optionalButton.setEnabled(false);
-            bar.setIndeterminate(false);
-            bar.setValue(bar.getMaximum());
-            bar.setString(ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
+            // 取消时进度条就停在原处，别跳到 100% 让人以为还在往前走
+            if (!cancelling) {
+                bar.setIndeterminate(false);
+                bar.setValue(bar.getMaximum());
+            }
+            bar.setString(cancelling ? Text.of(Msg.CANCELLED)
+                    : ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
             stageLabel.setText(message == null || message.isEmpty() ? (ok ? Text.of(Msg.SYNC_COMPLETE) : Text.of(Msg.SYNC_FAILED)) : message);
-            if (!ok) {
+            if (!ok && !cancelling) {
                 detailLabel.setForeground(new Color(0xB0, 0x30, 0x30));
             }
         });
-        System.clearProperty(CANCEL_KEY);
+        // 只解除暂停：取消状态要留到后台线程全部自己停下，别让它们看到"没取消"继续写文件
+        Cancels.resume();
         if (lingerMillis > 0) {
             Thread closer = new Thread(() -> {
                 try {
@@ -261,22 +275,30 @@ final class ProgressWindow implements Progress {
         }
     }
 
-    /** 用户点了取消或关窗：先问一句，再决定停不停 */
+    /** 用户点了取消或关窗：先暂停，再问一句 */
     private void requestCancel() {
         if (finished.get() || cancelRequested) {
             return;
         }
+        // 先暂停：点下去的瞬间下载线程就在下一个数据块停住，弹窗期间不再继续下载
+        String previousStage = stageLabel.getText();
+        Cancels.pause();
+        stageLabel.setText(Text.of(Msg.UPDATE_PAUSED_WAITING));
         CancelPrompt.Choice choice = CancelPrompt.ask(frame);
         if (choice == CancelPrompt.Choice.CONTINUE) {
+            Cancels.resume();
+            stageLabel.setText(previousStage == null ? " " : previousStage);
             return;
         }
         cancelRequested = true;
+        cancelling = true;
         cancelButton.setEnabled(false);
         optionalButton.setEnabled(false);
         stageLabel.setText(Text.of(Msg.CANCELLING));
+        // 先写取消状态再解除暂停：暂停中的线程醒来立刻就能看到
         System.setProperty(CANCEL_KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
-        // 主线程可能还阻塞在网络读取上，轮询到取消状态要等下一 MB 边界：
-        // 给它 2 秒自行收尾，超时就不等了，直接关窗
+        Cancels.resume();
+        // 后台线程会在下一个数据块看到取消并停下；给它 2 秒自行收尾，超时就不等了，直接关窗
         Thread closer = new Thread(() -> {
             try {
                 Thread.sleep(2000);
@@ -298,9 +320,9 @@ final class ProgressWindow implements Progress {
         }
     }
 
-    /** 更新界面；已结束或窗口已关掉时忽略 */
+    /** 更新界面；已结束、已取消或窗口已关掉时忽略，进度条不会继续往前爬 */
     private void update(Runnable action) {
-        if (finished.get()) {
+        if (finished.get() || cancelling) {
             return;
         }
         try {

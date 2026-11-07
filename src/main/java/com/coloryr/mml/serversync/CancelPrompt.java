@@ -64,6 +64,11 @@ final class CancelPrompt {
         JLabel question = new JLabel(Text.of(Msg.CANCEL_DIALOG_QUESTION));
         question.setBorder(BorderFactory.createEmptyBorder(0, 0, 14, 0));
 
+        JButton cont = new JButton(Text.of(Msg.CANCEL_DIALOG_CONTINUE));
+        cont.addActionListener(event -> {
+            choice[0] = Choice.CONTINUE;
+            dialog.dispose();
+        });
         JButton skip = new JButton(Text.of(Msg.CANCEL_DIALOG_SKIP));
         skip.addActionListener(event -> {
             choice[0] = Choice.SKIP;
@@ -74,15 +79,16 @@ final class CancelPrompt {
             choice[0] = Choice.END;
             dialog.dispose();
         });
-        dialog.getRootPane().setDefaultButton(skip);
+        dialog.getRootPane().setDefaultButton(cont);
         dialog.getRootPane().registerKeyboardAction(event -> {
             choice[0] = Choice.CONTINUE;
             dialog.dispose();
         }, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        buttons.add(end);
+        buttons.add(cont);
         buttons.add(skip);
+        buttons.add(end);
 
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(BorderFactory.createEmptyBorder(16, 18, 14, 18));

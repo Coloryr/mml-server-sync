@@ -29,6 +29,8 @@ public final class Runner {
      */
     public static int run(String[] args, Progress progress) {
         Progress ui = progress == null ? Progress.NONE : progress;
+        // 每次运行从干净状态开始；上一轮的取消要留到后台线程全部停下，所以这里清
+        Cancels.clear();
         try {
             Options options = parse(args);
             if (options.help) {
@@ -80,7 +82,8 @@ public final class Runner {
                 Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
                 throw e;
             } finally {
-                System.clearProperty("mml.serverSync.cancel");
+                // 只解除暂停：取消状态留着，让可能在收尾的下载线程看到并停下
+                Cancels.resume();
                 Log.close();
             }
             return 0;
