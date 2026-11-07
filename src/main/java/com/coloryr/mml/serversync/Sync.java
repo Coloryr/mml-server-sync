@@ -46,8 +46,10 @@ final class Sync {
     private Map<String, String> optionalNotes = Collections.emptyMap();
     /** 打开中的自选模组弹窗；玩家确认后清空 */
     private final AtomicReference<PendingChoice> pendingDialog = new AtomicReference<>();
-    /** 本轮最近一次确认过的勾选结果（覆盖弹窗展示过的行）；null 表示还没有玩家确认过 */
-    private volatile Map<String, Boolean> lastChoice;
+    /** 本轮最近一次确认过的弹窗结果；弹窗线程写入，收尾时读取，null 表示还没有玩家确认过 */
+    private volatile OptionalModsDialog.Result lastChoice;
+    /** 玩家是否勾过「以后不再显示」：没勾时每次启动都弹窗，勾了只在有新增或变化时弹 */
+    private boolean promptSuppressed;
 
     Sync(Options options, Progress ui) {
         this.options = options;
@@ -56,15 +58,13 @@ final class Sync {
         this.ui = ui == null ? Progress.NONE : ui;
     }
 
-    /** 打开中的自选模组弹窗：玩家确认后 latch 归零、结果就位 */
+    /** 打开中的自选模组弹窗：玩家确认后 latch 归零 */
     private static final class PendingChoice {
         final CountDownLatch done = new CountDownLatch(1);
-        final AtomicReference<Map<String, Boolean>> result = new AtomicReference<>();
 
-        /** 等玩家确认；返回全部展示行的勾选状态 */
-        Map<String, Boolean> await() throws InterruptedException {
+        /** 等玩家确认；结果由 {@link #lastChoice} 取 */
+        void await() throws InterruptedException {
             done.await();
-            return result.get();
         }
     }
 
@@ -79,12 +79,17 @@ final class Sync {
         String manifestUrl;
         byte[] data;
         Manifest current;
+        // 「以后不再显示」的标记先读：两条不下载任何文件的提前返回也要按它决定弹不弹
+        promptSuppressed = OptionalState.promptSuppressed(options.stateDir);
         try {
             manifestUrl = toUrl(options.manifest);
             ui.stage(Text.of(Msg.FETCHING_MANIFEST_FINGERPRINT));
             // 先比清单指纹：发布目录里有 server.json.sha1 且没变时，整份清单都不用下
             if (!options.force && manifestUnchanged(manifestUrl)) {
-                return Text.of(Msg.MANIFEST_UNCHANGED_SKIPPING_SYNC);
+                String summary = Text.of(Msg.MANIFEST_UNCHANGED_SKIPPING_SYNC);
+                // 指纹一致说明本地副本与远端字节相同，弹窗直接拿本地的组装，不重下整份清单
+                String prompted = promptFromLocalManifest(manifestUrl);
+                return prompted == null ? summary : prompted;
             }
             ui.stage(Text.of(Msg.DOWNLOADING_MANIFEST));
             // 清单可能要下几十秒：进度条转不确定状态，接收进度回传到窗口
@@ -106,28 +111,7 @@ final class Sync {
         ui.title((current.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : current.name)
                 + " · " + packVersionOf(current));
 
-        // 自选模组状态先于按钮接线加载：任何时刻点开的弹窗都有完整数据
-        OptionalState.Loaded state = OptionalState.load(options.stateDir);
-        optionalState = state;
-        List<Manifest.FileEntry> changedOptionals = new ArrayList<>();
-        for (Manifest.FileEntry item : current.files) {
-            if (!item.optional) {
-                continue;
-            }
-            Boolean recorded = state.selected(item.path);
-            boolean selected;
-            if (options.skip.contains(item.path)) {
-                selected = false;
-            } else if (recorded != null) {
-                selected = recorded;
-            } else {
-                selected = canAsk();
-            }
-            selections.put(item.path, selected);
-            if (!state.hashOf(item.path).equalsIgnoreCase(contentHash(item))) {
-                changedOptionals.add(item);
-            }
-        }
+        List<Manifest.FileEntry> changedOptionals = prepareOptionals(current);
 
         // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
         // 按钮按文字在窗口树里定位后直接挂监听：从 update/ 包运行时类加载器分裂，
@@ -141,7 +125,7 @@ final class Sync {
             }
         }
 
-        Manifest old = loadOld(current);
+        Manifest old = loadLocalManifest();
         if (old == null) {
             info(Text.of(Msg.NO_LOCAL_RECORD_VERSION, packVersionOf(current)));
         } else {
@@ -149,7 +133,10 @@ final class Sync {
         }
         if (!options.force && sameVersion(old, current)) {
             info(Text.of(Msg.PACK_VERSION_UNCHANGED_DETAIL, current.packVersion));
-            return Text.of(Msg.PACK_VERSION_UNCHANGED_SKIPPING_SYNC);
+            String summary = Text.of(Msg.PACK_VERSION_UNCHANGED_SKIPPING_SYNC);
+            // 版本没变照样要弹：玩家每次启动都该有一次改选的机会，选完当场归位
+            String prompted = promptOnUnchanged(current, changedOptionals.size(), manifestUrl);
+            return prompted == null ? summary : prompted;
         }
 
         ui.stage(Text.of(Msg.CHECKING_LOCAL_FILES));
@@ -159,12 +146,12 @@ final class Sync {
         }
         ui.stage(Text.of(Msg.COMPARING_CHANGES));
 
-        // 有新增或内容变化的条目就绪后即弹窗：同步继续在后台跑，收尾时再来等确认结果
-        if (!options.dryRun && options.skip.isEmpty() && !changedOptionals.isEmpty() && canAsk()) {
-            String header = state.firstRun
-                    ? Text.of(Msg.HEADER_FIRST_RUN)
-                    : Text.of(Msg.HEADER_CHANGES, changedOptionals.size());
-            openDialog(buildRows(current), header);
+        // 弹窗就绪即开：同步继续在后台跑，收尾时再来等确认结果
+        if (shouldPrompt(changedOptionals.size())) {
+            openDialog(buildRows(current),
+                    promptHeader(changedOptionals.size(), countOptionals(current)), promptSuppressed);
+        } else if (promptSuppressed && canAsk()) {
+            info(Text.of(Msg.PROMPT_SUPPRESSED_HINT));
         }
 
         List<String> removedDirs = new ArrayList<>();
@@ -274,23 +261,52 @@ final class Sync {
         if (pending != null) {
             ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
             try {
-                Map<String, Boolean> chosen = pending.await();
-                if (chosen != null) {
-                    lastChoice = chosen;
-                }
+                pending.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException(Text.of(Msg.DOWNLOAD_INTERRUPTED), e);
             }
         }
         checkCancelled();
-        ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
-        // 只并入弹窗展示过的行：部分行弹窗（如仅新增条目）确认时，未展示行的选择保持原状
-        if (lastChoice != null) {
-            for (Map.Entry<String, Boolean> entry : lastChoice.entrySet()) {
-                selections.put(entry.getKey(), entry.getValue());
+        consumeChoice();
+        applySelections(current);
+    }
+
+    /**
+     * 把玩家确认的结果并进勾选，并按需要记住「以后不再显示」
+     *
+     * 只并入弹窗展示过的行：部分行弹窗（如仅新增条目）确认时，未展示行的选择保持原状。
+     *
+     * # 返回值
+     *
+     * 选择或「以后不再显示」的标记有变化时返回 true
+     */
+    private boolean consumeChoice() {
+        if (lastChoice == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (Map.Entry<String, Boolean> entry : lastChoice.selections.entrySet()) {
+            if (!entry.getValue().equals(selections.put(entry.getKey(), entry.getValue()))) {
+                changed = true;
             }
         }
+        if (lastChoice.suppressPrompt != promptSuppressed) {
+            try {
+                OptionalState.savePromptSuppressed(options.stateDir, lastChoice.suppressPrompt);
+                promptSuppressed = lastChoice.suppressPrompt;
+                changed = true;
+            } catch (IOException e) {
+                // 标记写不进去只是下次还会弹，不值得把整次同步判失败
+                Log.error(Text.of(Msg.FAILED_TO_SAVE_THE_OPTIONAL_PROMPT_STATE) + e.getMessage());
+            }
+        }
+        return changed;
+    }
+
+    /** 按勾选把文件归位，并把启用 / 禁用条数写进日志 */
+    private void applySelections(Manifest current) throws IOException {
+        ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
         reconcileOptionalFiles(current);
         int enabled = 0;
         int disabled = 0;
@@ -351,21 +367,36 @@ final class Sync {
         if (options.dryRun || current == null || pendingDialog.get() != null) {
             return;
         }
-        openDialog(buildRows(current), Text.of(Msg.HEADER_MANAGE, countOptionals(current)));
+        openDialog(buildRows(current), Text.of(Msg.HEADER_MANAGE, countOptionals(current)),
+                promptSuppressed);
     }
 
-    private void openDialog(List<OptionalModsDialog.Row> rows, String header) {
+    /**
+     * 打开勾选窗，返回可用于等待的句柄
+     *
+     * 窗口在事件线程上开，本方法立即返回；调用方要等玩家确认就 await 返回的句柄。
+     * 已有弹窗开着时返回 null——同一时刻只允许一扇。
+     *
+     * - `rows`: 要列出的条目
+     * - `header`: 表格上方的说明文字
+     * - `rememberChecked`: 「以后不再显示」的初始勾选状态
+     *
+     * # 返回值
+     *
+     * 本次弹窗的句柄；已有弹窗开着时返回 null
+     */
+    private PendingChoice openDialog(List<OptionalModsDialog.Row> rows, String header,
+                                     boolean rememberChecked) {
         PendingChoice pending = new PendingChoice();
         if (!pendingDialog.compareAndSet(null, pending)) {
-            return;
+            return null;
         }
         try {
             javax.swing.JFrame parent = ownerFrame();
             javax.swing.SwingUtilities.invokeLater(() -> {
                 try {
-                    Map<String, Boolean> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
-                    pending.result.set(chosen);
-                    lastChoice = chosen;
+                    lastChoice = OptionalModsDialog.askForSelection(parent, rows, header,
+                            rememberChecked);
                 } finally {
                     pending.done.countDown();
                     pendingDialog.compareAndSet(pending, null);
@@ -380,6 +411,135 @@ final class Sync {
             info(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG,
                     message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message));
         }
+        return pending;
+    }
+
+    /**
+     * 读清单里的可选条目与上次的选择，填好本次的勾选
+     *
+     * @param current 清单
+     *
+     * # 返回值
+     *
+     * 新增或内容有变化的可选条目；非空说明清单这边动过自选模组
+     */
+    private List<Manifest.FileEntry> prepareOptionals(Manifest current) {
+        OptionalState.Loaded state = OptionalState.load(options.stateDir);
+        optionalState = state;
+        List<Manifest.FileEntry> changed = new ArrayList<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (!item.optional) {
+                continue;
+            }
+            Boolean recorded = state.selected(item.path);
+            boolean selected;
+            if (options.skip.contains(item.path)) {
+                selected = false;
+            } else if (recorded != null) {
+                selected = recorded;
+            } else {
+                selected = canAsk();
+            }
+            selections.put(item.path, selected);
+            if (!state.hashOf(item.path).equalsIgnoreCase(contentHash(item))) {
+                changed.add(item);
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * 该不该弹自选模组窗
+     *
+     * 没勾「以后不再显示」时每次启动都弹；勾了就只在有新增或内容变化时弹——
+     * 否则以后新增的自选模组玩家永远没机会启用。
+     *
+     * @param changedCount 新增或内容变化的可选条目数
+     */
+    private boolean shouldPrompt(int changedCount) {
+        return !options.dryRun && options.skip.isEmpty() && canAsk()
+                && (!promptSuppressed || changedCount > 0);
+    }
+
+    /** 弹窗标题：首次同步 / 每次启动 / 有新增或变化三种场景 */
+    private String promptHeader(int changedCount, int total) {
+        if (optionalState.firstRun) {
+            return Text.of(Msg.HEADER_FIRST_RUN);
+        }
+        if (promptSuppressed) {
+            return Text.of(Msg.HEADER_CHANGES, changedCount);
+        }
+        return Text.of(Msg.HEADER_EVERY_START, total);
+    }
+
+    /**
+     * 指纹命中时的弹窗：本地清单副本与远端字节相同，直接拿来组装行数据
+     *
+     * 已勾「以后不再显示」时连副本都不必解析——清单没变就不会有新增或变化，
+     * 这条快速路径保持一次请求、零解析。
+     *
+     * @param manifestUrl 清单地址，用于取发布端写的简介
+     *
+     * # 返回值
+     *
+     * 玩家改过选择时的一句话结果；不弹或没改动时为 null
+     */
+    private String promptFromLocalManifest(String manifestUrl) {
+        if (!shouldPrompt(0)) {
+            return null;
+        }
+        Manifest local = loadLocalManifest();
+        if (local == null) {
+            return null;
+        }
+        ui.title((local.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : local.name)
+                + " · " + packVersionOf(local));
+        List<Manifest.FileEntry> changed = prepareOptionals(local);
+        return promptOnUnchanged(local, changed.size(), manifestUrl);
+    }
+
+    /**
+     * 没有文件要更新时弹窗，选完当场按勾选归位
+     *
+     * 这条路径不下载任何文件，归位只是改文件名；选择与标记写完就生效，
+     * 不必等下一次真正的同步。归位本身出错只记日志：这条路径一个文件都没下载过，
+     * 不该因为改名失败拦住启动，下次启动会照原样重试。
+     *
+     * @param current      清单，用于组装行与归位
+     * @param changedCount 新增或内容变化的可选条目数
+     * @param manifestUrl  清单地址，用于取发布端写的简介
+     *
+     * # 返回值
+     *
+     * 玩家改过选择时的一句话结果；不弹或没改动时为 null
+     */
+    private String promptOnUnchanged(Manifest current, int changedCount, String manifestUrl) {
+        if (!shouldPrompt(changedCount)) {
+            return null;
+        }
+        optionalNotes = fetchOptionalNotes(manifestUrl);
+        ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
+        PendingChoice pending = openDialog(buildRows(current),
+                promptHeader(changedCount, countOptionals(current)), promptSuppressed);
+        if (pending == null) {
+            return null;
+        }
+        try {
+            pending.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        if (!consumeChoice()) {
+            return null;
+        }
+        try {
+            applySelections(current);
+            OptionalState.save(options.stateDir, OptionalState.entries(selections, hashesOf(current)));
+        } catch (IOException e) {
+            Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
+        }
+        return Text.of(Msg.OPTIONAL_CHOICES_SAVED);
     }
 
     /** 弹窗行数据：状态区分新增 / 需更新 / 已同步，并带当前启用状态后缀 */
@@ -529,7 +689,16 @@ final class Sync {
         return version.isEmpty() ? Text.of(Msg.NOT_SPECIFIED) : version;
     }
 
-    private Manifest loadOld(Manifest current) {
+    /**
+     * 本地留存的上一份清单：状态目录里的副本优先，其次基础包里的 server.json
+     *
+     * 指纹命中时它和远端字节相同，可以直接当远端清单用。
+     *
+     * # 返回值
+     *
+     * 解析出的旧清单；两份都读不出来时返回 null
+     */
+    private Manifest loadLocalManifest() {
         Path state = options.stateDir.resolve("last-manifest.json");
         Path fallback = options.baseDir.resolve("server.json");
         for (Path path : new Path[]{state, fallback}) {
