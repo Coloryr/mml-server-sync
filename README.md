@@ -58,7 +58,8 @@ java -jar mml-server-sync.jar -m https://example.com/server.json -g "D:\Instance
 .\gradlew.bat build
 ```
 
-产物：`build/libs/mml-server-sync.jar`。构建细节、自更新索引格式与发版步骤见
+产物：`build/libs/mml-server-sync.jar`。发布包用 `.gradlew releaseIndex` 生成
+（`index.json` + 版本化 jar）。构建细节、自更新索引格式与发版步骤见
 [docs/build.md](docs/build.md)。
 
 ## 许可证

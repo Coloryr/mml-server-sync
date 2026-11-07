@@ -27,3 +27,86 @@ tasks.named('jar') {
         )
     }
 }
+
+/**
+ * 生成自更新用的 index.json
+ *
+ * 用法：
+ *   .\gradlew releaseIndex
+ *   .\gradlew releaseIndex -PreleaseNotes="本次更新内容" -PreleaseUrl="https://.../x.jar"
+ *   .\gradlew releaseIndex -PreleaseDir=dist
+ *
+ * 默认在 build/release 下生成 index.json 与 mml-server-sync-<version>.jar；
+ * 把这两个文件一起传到更新索引所在目录（默认 .../mml-server-sync/）即可。
+ */
+tasks.register('releaseIndex') {
+    group = 'distribution'
+    description = '生成自更新 index.json，并把带版本号的 jar 放到输出目录'
+    dependsOn tasks.named('jar')
+
+    // 配置期取值：doLast 里不再碰 project（Gradle 10 不允许执行期访问）
+    def projectVersion = version.toString()
+    def rootDir = projectDir
+    def mainFile = new File(rootDir, 'src/main/java/com/coloryr/mml/serversync/Main.java')
+    def jarArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
+    def releaseDirOption = providers.gradleProperty('releaseDir')
+    def releaseUrlOption = providers.gradleProperty('releaseUrl')
+    def releaseNotesOption = providers.gradleProperty('releaseNotes')
+
+    doLast {
+        def jsonEscape = { String value ->
+            value.replace('\\', '\\\\')
+                    .replace('"', '\\"')
+                    .replace('\r', '\\r')
+                    .replace('\n', '\\n')
+        }
+        def hex = { byte[] bytes ->
+            bytes.collect { String.format('%02x', it & 0xff) }.join()
+        }
+
+        def version = projectVersion
+        def matcher = mainFile.getText('UTF-8') =~ /static final String VERSION = "([^"]+)"/
+        if (!matcher.find()) {
+            throw new GradleException('读不到 Main.java 里的 VERSION')
+        }
+        def mainVersion = matcher.group(1)
+        if (mainVersion != version) {
+            throw new GradleException("版本号不一致：build.gradle=${version}，Main.VERSION=${mainVersion}")
+        }
+
+        def releaseDir = releaseDirOption.orNull ?: 'build/release'
+        def outDir = new File(releaseDir)
+        if (!outDir.absolute) {
+            outDir = new File(rootDir, releaseDir)
+        }
+        outDir.mkdirs()
+
+        def jarFile = jarArchive.get().asFile
+        def jarName = "mml-server-sync-${version}.jar"
+        def target = new File(outDir, jarName)
+        java.nio.file.Files.copy(jarFile.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+        def sha1 = hex(java.security.MessageDigest.getInstance('SHA-1')
+                .digest(java.nio.file.Files.readAllBytes(target.toPath())))
+        def sha256 = hex(java.security.MessageDigest.getInstance('SHA-256')
+                .digest(java.nio.file.Files.readAllBytes(target.toPath())))
+        def url = releaseUrlOption.orNull ?: jarName
+        def notes = releaseNotesOption.orNull ?: "mml-server-sync ${version}"
+        def index = new File(outDir, 'index.json')
+        index.setText("""{
+  "version": "${version}",
+  "url": "${jsonEscape(url)}",
+  "sha1": "${sha1}",
+  "sha256": "${sha256}",
+  "notes": "${jsonEscape(notes)}"
+}
+""", 'UTF-8')
+
+        logger.lifecycle("index.json -> ${index}")
+        logger.lifecycle("jar        -> ${target}")
+        logger.lifecycle("version=${version}")
+        logger.lifecycle("sha1=${sha1}")
+        logger.lifecycle("sha256=${sha256}")
+    }
+}

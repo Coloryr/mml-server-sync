@@ -34,6 +34,32 @@ Main-Class:    com.coloryr.mml.serversync.Main
 Premain-Class: com.coloryr.mml.serversync.Agent
 ```
 
+## 生成 index.json
+
+发布包用 Gradle 任务生成，哈希不用手填：
+
+```powershell
+.\gradlew releaseIndex
+```
+
+默认产物：
+
+```text
+build/release/index.json
+build/release/mml-server-sync-1.4.2.jar
+```
+
+- `version` / `url` 取 `build.gradle` 的版本号，jar 名固定为 `mml-server-sync-<version>.jar`；
+- `sha1` / `sha256` 自动计算；
+- 会自动校验 `build.gradle` 与 `Main.java` 里的 `VERSION` 一致，不一致直接报错；
+- `url` 默认写相对文件名（相对 index.json 所在目录解析），要指向别处用
+  `-PreleaseUrl="https://..."`；
+- 备注用 `-PreleaseNotes="..."`；
+- 输出目录用 `-PreleaseDir=dist`（相对路径按仓库根目录解析）。
+
+把 `index.json` 和版本化 jar 一起传到更新索引所在目录（默认
+`https://www.coloryr.com/mml-server-sync/`）即可。
+
 ## 版本号
 
 发版时改这几处，保持一致：
@@ -41,7 +67,7 @@ Premain-Class: com.coloryr.mml.serversync.Agent
 - `src/main/java/com/coloryr/mml/serversync/Main.java` 的 `VERSION`；
 - `build.gradle` 的 `version`；
 - `CHANGELOG.md` 新增对应版本；
-- 自更新索引 `index.json` 的 `version` / `url` / 哈希。
+- 然后跑一次 `.gradlew releaseIndex` 生成 `index.json` 与版本化 jar。
 
 ## 自更新
 
