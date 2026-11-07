@@ -218,7 +218,12 @@ final class Downloader {
     }
 
     byte[] fetch(String url) throws IOException {
-        return fetch(url, Collections.<String, String>emptyMap());
+        return fetch(url, Collections.<String, String>emptyMap(), null);
+    }
+
+    /** 清单下载进度回调：约每秒通知一次，与进度日志同节奏 */
+    interface FetchListener {
+        void progress(long done, long total);
     }
 
     /**
@@ -233,14 +238,25 @@ final class Downloader {
      * 响应体内容；取不到时抛 IOException
      */
     byte[] fetchQuiet(String url) throws IOException {
-        return fetchBytes(url, Collections.<String, String>emptyMap(), false);
+        return fetchBytes(url, Collections.<String, String>emptyMap(), null, false);
     }
 
     byte[] fetch(String url, Map<String, String> headers) throws IOException {
+        return fetch(url, headers, null);
+    }
+
+    /**
+     * 取一份远程文件并读入内存，清单类请求会协商 gzip
+     *
+     * - `url`: 地址
+     * - `headers`: 附加请求头，可为 null
+     * - `listener`: 下载进度回调，可为 null；约每秒一次
+     */
+    byte[] fetch(String url, Map<String, String> headers, FetchListener listener) throws IOException {
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
-        return fetchBytes(url, headers, !quiet);
+        return fetchBytes(url, headers, listener, !quiet);
     }
 
     /**
@@ -253,25 +269,28 @@ final class Downloader {
      * 个别反代会声明 gzip 却给未压缩的内容，此时退回不压缩再取一次。
      *
      * - `url`: 地址
-     * - `headers`: 额外请求头
+     * - `headers`: 额外请求头，可为 null
+     * - `listener`: 进度回调，可为 null
      * - `verbose`: 是否打进度与结果日志
      *
      * # 返回值
      *
      * 解压后的响应体
      */
-    private byte[] fetchBytes(String url, Map<String, String> headers, boolean verbose)
-            throws IOException {
+    private byte[] fetchBytes(String url, Map<String, String> headers, FetchListener listener,
+                              boolean verbose) throws IOException {
+        Map<String, String> safe = headers == null
+                ? Collections.<String, String>emptyMap() : headers;
         long started = System.nanoTime();
         byte[] data;
         try {
-            data = readBody(url, headers, true, verbose);
+            data = readBody(url, safe, listener, verbose, true);
         } catch (ZipException e) {
             // 头里写了 gzip、内容却不是：按未压缩再取一次
             if (verbose) {
                 Log.info(Text.of(Msg.GZIP_BODY_INVALID_RETRYING_WITHOUT_COMPRESSION, url));
             }
-            data = readBody(url, headers, false, verbose);
+            data = readBody(url, safe, listener, verbose, false);
         }
         if (verbose) {
             Log.info(Text.of(Msg.DOWNLOADER_JSON_FETCHED, data.length, seconds(started), url));
@@ -280,20 +299,23 @@ final class Downloader {
     }
 
     /** 打开连接并把响应体整段读进来；`gzip` 决定要不要请求压缩传输 */
-    private static byte[] readBody(String url, Map<String, String> headers, boolean gzip,
-                                   boolean verbose) throws IOException {
+    private static byte[] readBody(String url, Map<String, String> headers,
+                                   FetchListener listener, boolean verbose, boolean gzip)
+            throws IOException {
         URLConnection connection = open(url, headers, gzip);
-        long total = connection.getContentLengthLong();
+        long transferTotal = connection.getContentLengthLong();
         boolean compressed = isGzip(connection.getContentEncoding());
-        if (verbose && total > 0) {
-            Log.info(Text.of(Msg.FETCHING_JSON_SIZE, total,
+        if (verbose && transferTotal > 0) {
+            Log.info(Text.of(Msg.FETCHING_JSON_SIZE, transferTotal,
                     compressed ? Text.of(Msg.GZIP_SUFFIX) : "", url));
         } else if (verbose && compressed) {
             // chunked 响应没有 Content-Length，但压缩是否生效仍然值得写一行
             Log.info(Text.of(Msg.GZIP_TRANSFER, url));
         }
+        // gzip 时长度是压缩后的，进度按"未知总长"报，免得百分比失真
+        long total = compressed ? -1 : transferTotal;
         try (InputStream input = body(connection)) {
-            return readAll(input, url, total, verbose);
+            return readAll(input, url, total, listener, verbose);
         }
     }
 
@@ -303,10 +325,11 @@ final class Downloader {
      * - `input`: 响应体，已按 Content-Encoding 解压
      * - `url`: 地址，进进度日志
      * - `total`: 服务端给的传输字节数；未知时为 0 或负数
+     * - `listener`: 进度回调，可为 null
      * - `verbose`: 是否每秒打一条进度
      */
-    private static byte[] readAll(InputStream input, String url, long total, boolean verbose)
-            throws IOException {
+    private static byte[] readAll(InputStream input, String url, long total,
+                                  FetchListener listener, boolean verbose) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(
                 total > 0 && total <= Integer.MAX_VALUE - 8 ? (int) total : 8192);
         byte[] buffer = new byte[16 * 1024];
@@ -324,8 +347,13 @@ final class Downloader {
                 Cancels.check();
             }
             long now = System.nanoTime();
-            if (verbose && now - lastTime >= REPORT_INTERVAL) {
-                reportFetch(url, done, total, done - lastDone, now - lastTime);
+            if (now - lastTime >= REPORT_INTERVAL) {
+                if (verbose) {
+                    reportFetch(url, done, total, done - lastDone, now - lastTime);
+                }
+                if (listener != null) {
+                    listener.progress(done, total);
+                }
                 lastDone = done;
                 lastTime = now;
             }

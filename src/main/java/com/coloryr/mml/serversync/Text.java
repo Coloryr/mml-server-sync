@@ -43,6 +43,17 @@ final class Text {
         if (!override.isEmpty()) {
             return override.toLowerCase(Locale.ROOT).startsWith("zh");
         }
-        return "zh".equalsIgnoreCase(Locale.getDefault().getLanguage());
+        if ("zh".equalsIgnoreCase(Locale.getDefault().getLanguage())) {
+            return true;
+        }
+        // Prism 等启动器会给游戏 JVM 强制 -Duser.language=en，JVM locale 不再反映系统语言；
+        // 中文 Windows 的系统编码是 GBK 系列，用它与地区码兜底识别
+        String jnu = System.getProperty("sun.jnu.encoding", "").toUpperCase(Locale.ROOT);
+        if (jnu.contains("GBK") || jnu.contains("GB2312") || jnu.contains("GB18030")
+                || jnu.contains("MS936")) {
+            return true;
+        }
+        return "CN".equalsIgnoreCase(Locale.getDefault().getCountry())
+                || "CHN".equalsIgnoreCase(System.getProperty("user.country", ""));
     }
 }
