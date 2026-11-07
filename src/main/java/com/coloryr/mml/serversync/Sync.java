@@ -359,17 +359,27 @@ final class Sync {
         if (!pendingDialog.compareAndSet(null, pending)) {
             return;
         }
-        javax.swing.JFrame parent = ownerFrame();
-        javax.swing.SwingUtilities.invokeLater(() -> {
-            try {
-                Map<String, Boolean> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
-                pending.result.set(chosen);
-                lastChoice = chosen;
-            } finally {
-                pending.done.countDown();
-                pendingDialog.compareAndSet(pending, null);
-            }
-        });
+        try {
+            javax.swing.JFrame parent = ownerFrame();
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                try {
+                    Map<String, Boolean> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
+                    pending.result.set(chosen);
+                    lastChoice = chosen;
+                } finally {
+                    pending.done.countDown();
+                    pendingDialog.compareAndSet(pending, null);
+                }
+            });
+        } catch (Throwable e) {
+            // 弹窗打不开（没有显示服务器、AWT 初始化失败）：按没弹窗继续同步，不能中断更新
+            System.setProperty(ProgressWindow.GUI_FAILED_KEY, "true");
+            pending.done.countDown();
+            pendingDialog.compareAndSet(pending, null);
+            String message = e.getMessage();
+            info(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG,
+                    message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message));
+        }
     }
 
     /** 弹窗行数据：状态区分新增 / 需更新 / 已同步，并带当前启用状态后缀 */
@@ -691,7 +701,15 @@ final class Sync {
 
     /** 有界面、允许交互时才弹窗；不要求具体窗口类型（从 update/ 包运行时类加载器分裂，instanceof 不可用） */
     private boolean canAsk() {
-        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless();
+        if (!options.ask || !options.gui || ProgressWindow.guiUnavailable()) {
+            return false;
+        }
+        try {
+            return !java.awt.GraphicsEnvironment.isHeadless();
+        } catch (Throwable e) {
+            // 图形环境不可用（安卓启动器里 cacio 尚未接管等）：按无界面继续
+            return false;
+        }
     }
 
     /** 进度窗上的「自选模组」按钮：跨类加载器不能按类型接线，按文字在窗口树里定位 */

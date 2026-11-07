@@ -221,9 +221,13 @@ public final class Agent {
     }
 
     /** FCL / PojavLauncher 等安卓启动器的环境特征；MML 是桌面端，不会带这些变量 */
-    private static boolean isAndroidLauncher() {
+    static boolean isAndroidLauncher() {
+        // 启动器会把 os.version 写成 Android-15 / Android-16
+        if (System.getProperty("os.version", "").toLowerCase(Locale.ROOT).contains("android")) {
+            return true;
+        }
         String[] keys = {"FCL_NATIVEDIR", "FCL_VERSION_CODE", "POJAV_NATIVEDIR",
-                "POJAV_RENDERER", "MOD_ANDROID_RUNTIME", "DALVIK_JAVAVM"};
+                "POJAV_RENDERER", "MOD_ANDROID_RUNTIME", "DALVIK_JAVAVM", "ZALITH_VERSION_CODE"};
         for (String key : keys) {
             String value = System.getenv(key);
             if (value != null && !value.trim().isEmpty()) {

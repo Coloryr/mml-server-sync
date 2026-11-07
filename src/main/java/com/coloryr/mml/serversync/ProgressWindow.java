@@ -37,6 +37,13 @@ final class ProgressWindow implements Progress {
 
     /** 取消状态写在系统属性里，主流程按它决定停不停；值：skip / end */
     static final String CANCEL_KEY = "mml.serverSync.cancel";
+    /** GUI 初始化失败过一次的标记：用系统属性，跨类加载器也能读到 */
+    static final String GUI_FAILED_KEY = "mml.serverSync.guiFailed";
+
+    /** 之前建窗失败过（例如没有显示服务器）：后续别再尝试弹窗 */
+    static boolean guiUnavailable() {
+        return "true".equalsIgnoreCase(System.getProperty(GUI_FAILED_KEY, ""));
+    }
 
     private final JFrame frame;
     private final JLabel titleLabel;
@@ -131,14 +138,24 @@ final class ProgressWindow implements Progress {
      * 窗口实例；没有窗口时是空实现
      */
     static Progress open(boolean enabled, int lingerMillis) {
-        if (!enabled || GraphicsEnvironment.isHeadless()) {
+        if (!enabled || guiUnavailable()) {
             return Progress.NONE;
         }
         try {
+            if (GraphicsEnvironment.isHeadless()) {
+                return Progress.NONE;
+            }
             ProgressWindow[] holder = new ProgressWindow[1];
             SwingUtilities.invokeAndWait(() -> holder[0] = new ProgressWindow(lingerMillis));
             return holder[0];
         } catch (Throwable e) {
+            // 没有可用的图形环境（X11 初始化失败、cacio 未就绪等）：记住，之后别再试。
+            // 这里只写控制台：Log 要到 Runner 里才打开。
+            System.setProperty(GUI_FAILED_KEY, "true");
+            String message = e.getMessage();
+            System.out.println(Log.PREFIX + Text.of(Msg.GUI_UNAVAILABLE_HEADLESS,
+                    message == null || message.trim().isEmpty()
+                            ? e.getClass().getSimpleName() : message));
             return Progress.NONE;
         }
     }

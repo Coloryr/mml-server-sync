@@ -219,6 +219,7 @@ enum Msg {
     CANCEL_DIALOG_CONTINUE("继续更新", "Continue update"),
     UPDATE_PAUSED_WAITING("已暂停，等待选择", "Paused, waiting for a choice"),
     UPDATE_CANCELLED_MIDWAY("更新已取消，可能有文件已写入；下次启动会补齐", "Update cancelled; some files may have been written. The next launch will finish it."),
+    GUI_UNAVAILABLE_HEADLESS("图形界面初始化失败，按无界面同步: %s", "GUI initialization failed, running headless: %s"),
     FAILED_TO_OPEN_THE_CANCEL_DIALOG("取消确认框打开失败: %s", "Failed to open the cancel dialog: %s");
 
     private final String zh;
