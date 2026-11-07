@@ -23,6 +23,13 @@ final class Bootstrap {
     /** 更新包文件名前缀与后缀，中间的版本号用于排序 */
     private static final String FILE_PREFIX = "mml-server-sync-";
     private static final String FILE_SUFFIX = ".jar";
+    /**
+     * 进度窗结束后停留多久，通过系统属性传给更新包。
+     *
+     * 有更新包时窗口由更新包创建（它才是最新代码），而停留时间是引导方才知道的，
+     * 跨类加载器只有系统属性这一条通道可靠。
+     */
+    static final String LINGER_KEY = "mml.serverSync.linger";
 
     private Bootstrap() {}
 
@@ -65,33 +72,50 @@ final class Bootstrap {
                 quick = true;
             }
         }
-        // 只看用法 / 版本时不建窗口，免得开一下又马上关
-        Progress progress = quick ? Progress.NONE : ProgressWindow.open(gui, lingerMillis);
+        // 有更新包时窗口交给它建：基包不随更新包变化，窗口留在基包里会让界面
+        // 永远停在基包那一版的布局。更新包拿到的是空实现，自己按参数决定要不要开窗。
+        Path packageJar = newestOf();
+        Progress[] holder = new Progress[1];
+        holder[0] = quick || packageJar != null
+                ? Progress.NONE
+                : ProgressWindow.open(gui, lingerMillis);
+        if (packageJar != null) {
+            System.setProperty(LINGER_KEY, String.valueOf(lingerMillis));
+        }
         Thread updater = quick ? null : Updater.start(update, index);
         int code;
         try {
-            code = launch(args, progress);
+            code = launch(args, packageJar, holder, gui, lingerMillis);
         } finally {
             if (waitUpdate) {
                 join(updater);
             }
-            closeUnfinished(progress, lingerMillis);
+            closeUnfinished(holder[0], lingerMillis);
         }
         return code;
     }
 
     /** 有更新的 jar 就用它，否则退回当前 jar */
-    private static int launch(String[] args, Progress progress) {
+    private static int launch(String[] args, Path packageJar, Progress[] holder,
+                              boolean gui, int lingerMillis) {
+        if (packageJar == null) {
+            return Runner.run(args, holder[0]);
+        }
+        Integer code = runFromJar(packageJar, args, holder[0]);
+        if (code != null) {
+            return code;
+        }
+        // 更新包装不上：回到本包重跑，窗口也得由本包补上（此前交给更新包了）
+        if (holder[0] == Progress.NONE) {
+            holder[0] = ProgressWindow.open(gui, lingerMillis);
+        }
+        return Runner.run(args, holder[0]);
+    }
+
+    /** 本次运行可用的更新包；没有时返回 null */
+    private static Path newestOf() {
         Path jar = Updater.jarPath();
-        if (jar == null) {
-            return Runner.run(args, progress);
-        }
-        Path newest = newest(Updater.updateDir(jar));
-        if (newest == null) {
-            return Runner.run(args, progress);
-        }
-        Integer code = runFromJar(newest, args, progress);
-        return code == null ? Runner.run(args, progress) : code;
+        return jar == null ? null : newest(Updater.updateDir(jar));
     }
 
     /**

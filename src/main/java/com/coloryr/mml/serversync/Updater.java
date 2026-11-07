@@ -27,6 +27,15 @@ final class Updater {
     static final String DEFAULT_INDEX =
             "https://www.coloryr.com/mml-server-sync/index.json";
 
+    /**
+     * 原始更新器 jar 路径的系统属性键。
+     *
+     * 入口（premain / main）在启动时用类加载源捕获并写入；从 update/ 包运行时
+     * 类加载源指向 update/ 里的副本，而 JVM 独占锁着的、清单条目对应的
+     * 是 -javaagent / -jar 指定的那份原始 jar，两者不能混用。
+     */
+    static final String SELF_JAR_KEY = "mml.serverSync.selfJar";
+
     /** 更新包目录名，放在 jar 同目录下 */
     private static final String UPDATE_DIR = "update";
     /** 更新包文件名前缀，中间是版本号 */
@@ -130,6 +139,60 @@ final class Updater {
         writeSidecar(target, SHA256_SIDECAR, sha256);
         prune(dir, target);
         Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
+    }
+
+    /** 把原始 jar 路径记进系统属性，供同步计划跳过自身条目；须在入口最先调用 */
+    static void captureSelfJar() {
+        Path jar = jarPath();
+        if (jar != null) {
+            System.setProperty(SELF_JAR_KEY, jar.toAbsolutePath().normalize().toString());
+        }
+    }
+
+    /**
+     * 原始 jar（被 -javaagent / -jar 指定、JVM 锁住的那份）的路径。
+     *
+     * 顺序：入口捕获的系统属性 → 当前类加载源（不经 update/ 运行时就是原始 jar）→
+     * 从 update/ 包运行时到它的上级目录找 `mml-server-sync*.jar`。最后这条兜底覆盖
+     * 「旧版本入口还没有捕获逻辑」的过渡期：第一次自更新到本版本后，运行代码来自
+     * update/，而锁住的原始 jar 是旧入口那份，属性尚未由它写入。
+     *
+     * # 返回值
+     *
+     * 原始 jar 路径；找不到时返回 null
+     */
+    static Path originalJarPath() {
+        String property = System.getProperty(SELF_JAR_KEY, "").trim();
+        if (!property.isEmpty()) {
+            return Paths.get(property);
+        }
+        Path running = jarPath();
+        if (running == null) {
+            return null;
+        }
+        Path parent = running.toAbsolutePath().normalize().getParent();
+        if (parent == null || !UPDATE_DIR.equalsIgnoreCase(parent.getFileName().toString())) {
+            return running;
+        }
+        Path originDir = parent.getParent();
+        if (originDir == null) {
+            return null;
+        }
+        Path preferred = originDir.resolve("mml-server-sync.jar");
+        if (Files.isRegularFile(preferred)) {
+            return preferred;
+        }
+        try (DirectoryStream<Path> stream =
+                     Files.newDirectoryStream(originDir, FILE_PREFIX + "*" + FILE_SUFFIX)) {
+            for (Path candidate : stream) {
+                if (Files.isRegularFile(candidate)) {
+                    return candidate;
+                }
+            }
+        } catch (IOException ignored) {
+            // 找不到就当没有，跳过逻辑退化为不跳过
+        }
+        return null;
     }
 
     /**

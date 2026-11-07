@@ -19,6 +19,8 @@ public final class Agent {
     private Agent() {}
 
     public static void premain(String agentArgs, Instrumentation instrumentation) {
+        // premain 从 -javaagent 指定的原始 jar 加载，此刻的类加载源就是原始 jar
+        Updater.captureSelfJar();
         Path gameDir = gameDir();
         if (skipLauncherCheck()) {
             System.out.println(Log.PREFIX + Text.of(Msg.MML_SKIP_IS_SET_SKIPPING_THE_MML_LAUNCHER_CHECK));

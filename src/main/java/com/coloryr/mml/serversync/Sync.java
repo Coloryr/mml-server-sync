@@ -46,8 +46,8 @@ final class Sync {
     private Map<String, String> optionalNotes = Collections.emptyMap();
     /** 打开中的自选模组弹窗；玩家确认后清空 */
     private final AtomicReference<PendingChoice> pendingDialog = new AtomicReference<>();
-    /** 本轮最近一次确认过的勾选结果；null 表示还没有玩家确认过 */
-    private volatile Set<String> lastChoice;
+    /** 本轮最近一次确认过的勾选结果（覆盖弹窗展示过的行）；null 表示还没有玩家确认过 */
+    private volatile Map<String, Boolean> lastChoice;
 
     Sync(Options options, Progress ui) {
         this.options = options;
@@ -59,10 +59,10 @@ final class Sync {
     /** 打开中的自选模组弹窗：玩家确认后 latch 归零、结果就位 */
     private static final class PendingChoice {
         final CountDownLatch done = new CountDownLatch(1);
-        final AtomicReference<Set<String>> result = new AtomicReference<>();
+        final AtomicReference<Map<String, Boolean>> result = new AtomicReference<>();
 
-        /** 等玩家确认；返回勾选的路径集合 */
-        Set<String> await() throws InterruptedException {
+        /** 等玩家确认；返回全部展示行的勾选状态 */
+        Map<String, Boolean> await() throws InterruptedException {
             done.await();
             return result.get();
         }
@@ -106,15 +106,7 @@ final class Sync {
         ui.title((current.name.isEmpty() ? Text.of(Msg.SERVER_INSTANCE) : current.name)
                 + " · " + packVersionOf(current));
 
-        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装
-        if (canAsk()) {
-            ((ProgressWindow) ui).setOptionalHandler(this::openManageDialog);
-            ((ProgressWindow) ui).enableOptionalModsButton();
-            optionalNotes = fetchOptionalNotes(manifestUrl);
-        }
-
-        // 自选模组勾选：上次的记录优先；没有记录的条目按交互能力给默认
-        // （可交互 = 默认勾选，无人值守 = 禁用安装）；--skip 指定的强制不勾选
+        // 自选模组状态先于按钮接线加载：任何时刻点开的弹窗都有完整数据
         OptionalState.Loaded state = OptionalState.load(options.stateDir);
         optionalState = state;
         List<Manifest.FileEntry> changedOptionals = new ArrayList<>();
@@ -134,6 +126,18 @@ final class Sync {
             selections.put(item.path, selected);
             if (!state.hashOf(item.path).equalsIgnoreCase(contentHash(item))) {
                 changedOptionals.add(item);
+            }
+        }
+
+        // 「自选模组」入口常驻：清单就绪即可点，弹窗按当前状态即时组装。
+        // 按钮按文字在窗口树里定位后直接挂监听：从 update/ 包运行时类加载器分裂，
+        // 无法用具体窗口类型接线，扫描方式两种运行形态通用。
+        if (canAsk()) {
+            optionalNotes = fetchOptionalNotes(manifestUrl);
+            javax.swing.JButton button = findOptionalButton();
+            if (button != null) {
+                button.setEnabled(true);
+                button.addActionListener(event -> openManageDialog());
             }
         }
 
@@ -165,7 +169,8 @@ final class Sync {
 
         List<String> removedDirs = new ArrayList<>();
         Set<String> removedFiles = new java.util.HashSet<>();
-        planRemovals(old, current, removedFiles, removedDirs);
+        String selfJar = selfJarRelative();
+        planRemovals(old, current, removedFiles, removedDirs, selfJar);
         if (options.dryRun) {
             printOptionalPlan(current);
             printPlan(current, old, removedFiles, removedDirs);
@@ -180,7 +185,7 @@ final class Sync {
         }
 
         boolean needBase = current.base != null && (old == null || old.base == null);
-        List<PlannedFile> files = changedFiles(current);
+        List<PlannedFile> files = changedFiles(current, selfJar);
         List<ArchivePlan> archives = archivePlans(old, current, removedDirs);
         int archiveCount = 0;
         for (ArchivePlan plan : archives) {
@@ -269,7 +274,7 @@ final class Sync {
         if (pending != null) {
             ui.stage(Text.of(Msg.WAITING_FOR_OPTIONAL_MOD_SELECTION));
             try {
-                Set<String> chosen = pending.await();
+                Map<String, Boolean> chosen = pending.await();
                 if (chosen != null) {
                     lastChoice = chosen;
                 }
@@ -280,11 +285,10 @@ final class Sync {
         }
         checkCancelled();
         ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
+        // 只并入弹窗展示过的行：部分行弹窗（如仅新增条目）确认时，未展示行的选择保持原状
         if (lastChoice != null) {
-            for (Manifest.FileEntry item : current.files) {
-                if (item.optional) {
-                    selections.put(item.path, lastChoice.contains(item.path));
-                }
+            for (Map.Entry<String, Boolean> entry : lastChoice.entrySet()) {
+                selections.put(entry.getKey(), entry.getValue());
             }
         }
         reconcileOptionalFiles(current);
@@ -355,10 +359,10 @@ final class Sync {
         if (!pendingDialog.compareAndSet(null, pending)) {
             return;
         }
-        javax.swing.JFrame parent = ((ProgressWindow) ui).frame();
+        javax.swing.JFrame parent = ownerFrame();
         javax.swing.SwingUtilities.invokeLater(() -> {
             try {
-                Set<String> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
+                Map<String, Boolean> chosen = OptionalModsDialog.askForSelection(parent, rows, header);
                 pending.result.set(chosen);
                 lastChoice = chosen;
             } finally {
@@ -556,7 +560,8 @@ final class Sync {
         }
     }
 
-    private void planRemovals(Manifest old, Manifest current, Set<String> files, List<String> dirs) {
+    private void planRemovals(Manifest old, Manifest current, Set<String> files, List<String> dirs,
+                              String selfJar) {
         if (old == null) {
             return;
         }
@@ -566,7 +571,8 @@ final class Sync {
         }
         for (Manifest.FileEntry item : old.files) {
             Manifest.FileEntry replacement = byIdentity.get(item.identity());
-            if (replacement == null || !replacement.path.equals(item.path)) {
+            if ((replacement == null || !replacement.path.equals(item.path))
+                    && !item.path.equals(selfJar)) {
                 files.add(item.path);
             }
         }
@@ -602,10 +608,18 @@ final class Sync {
      *
      * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
      * 自选模组的内容始终同步，勾选与否只决定装成启用名还是 .disabled。
+     *
+     * - `current`: 远程清单
+     * - `selfJar`: 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
      */
-    private List<PlannedFile> changedFiles(Manifest current) throws IOException {
+    private List<PlannedFile> changedFiles(Manifest current, String selfJar) throws IOException {
         List<PlannedFile> out = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
+            // 更新器自身在运行中无法被覆盖（Windows 文件锁）：升级走自更新通道
+            if (item.path.equals(selfJar)) {
+                info(Text.of(Msg.SELF_JAR_SKIPPED, item.path));
+                continue;
+            }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
             Path existing = existingVariant(target);
             if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
@@ -656,10 +670,63 @@ final class Sync {
         return item.sha1.isEmpty() ? item.sha256 : item.sha1;
     }
 
-    /** 有界面、允许交互、也真的弹得出来时才弹窗 */
+    /**
+     * 运行中的原始更新器 jar 对游戏目录的相对路径
+     *
+     * jar 不在游戏目录内、跨盘或找不到时返回空串——相对化会带 .. 或抛异常，
+     * 而清单路径不允许 ..，永远不会与这种值相等。
+     */
+    private String selfJarRelative() {
+        Path jar = Updater.originalJarPath();
+        if (jar == null) {
+            return "";
+        }
+        try {
+            return options.gameDir.toAbsolutePath().normalize().relativize(
+                    jar.toAbsolutePath().normalize()).toString().replace('\\', '/');
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /** 有界面、允许交互时才弹窗；不要求具体窗口类型（从 update/ 包运行时类加载器分裂，instanceof 不可用） */
     private boolean canAsk() {
-        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless()
-                && ui instanceof ProgressWindow;
+        return options.ask && options.gui && !java.awt.GraphicsEnvironment.isHeadless();
+    }
+
+    /** 进度窗上的「自选模组」按钮：跨类加载器不能按类型接线，按文字在窗口树里定位 */
+    private javax.swing.JButton findOptionalButton() {
+        javax.swing.JFrame frame = ownerFrame();
+        if (frame == null) {
+            return null;
+        }
+        return findButtonByText(frame.getContentPane(), Text.of(Msg.OPTIONAL_MODS_BUTTON));
+    }
+
+    private static javax.swing.JButton findButtonByText(java.awt.Container root, String text) {
+        for (java.awt.Component child : root.getComponents()) {
+            if (child instanceof javax.swing.JButton
+                    && text.equals(((javax.swing.JButton) child).getText())) {
+                return (javax.swing.JButton) child;
+            }
+            if (child instanceof java.awt.Container) {
+                javax.swing.JButton found = findButtonByText((java.awt.Container) child, text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 找正在显示的进度窗当弹窗父窗口；没有时返回 null，对话框居屏幕中 */
+    private static javax.swing.JFrame ownerFrame() {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            if (window instanceof javax.swing.JFrame && window.isShowing()) {
+                return (javax.swing.JFrame) window;
+            }
+        }
+        return null;
     }
 
     private Path existingVariantQuiet(String path) {
