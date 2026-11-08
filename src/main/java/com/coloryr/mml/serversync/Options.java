@@ -17,6 +17,8 @@ final class Options {
     boolean quiet;
     /** 清单拉不到时只记日志、不中止启动；仅 Agent 模式打开 */
     boolean lenient;
+    /** 失败时弹窗询问重试 / 跳过 / 关闭；优先于 {@link #lenient}，无图形界面时自动退化 */
+    boolean askOnFailure;
     /** 同时下载的文件数，1-64 */
     int threads = 16;
     /** 是否显示 Swing 进度窗口；无图形界面时自动退化为不显示 */

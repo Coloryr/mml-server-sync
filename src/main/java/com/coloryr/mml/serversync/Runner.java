@@ -62,27 +62,55 @@ public final class Runner {
                     ? options.stateDir.resolve(Log.FILE_NAME)
                     : options.logFile.toAbsolutePath().normalize());
             Log.info("mml-server-sync " + Main.VERSION);
+            // 真机上靠这行校准缩放：屏幕、DPI、AWT 变换与最终倍数都会写进日志
+            UiScale.log();
             Log.info(Text.of(Msg.STARTING_SYNC_GAME_DIRECTORY) + options.gameDir);
             try {
-                String summary = new Sync(options, ui).run();
-                if (!options.quiet) {
-                    Log.info(summary);
+                // 失败后可以选择重试，所以整段同步放在循环里；窗口与日志在整个循环里共用
+                for (;;) {
+                    try {
+                        String summary = new Sync(options, ui).run();
+                        if (!options.quiet) {
+                            Log.info(summary);
+                        }
+                        ui.finish(true, summary);
+                        break;
+                    } catch (CancelledException e) {
+                        // 用户选了「跳过更新」：退出码 0，游戏照常启动，下次启动补齐
+                        ui.finish(false, e.getMessage());
+                        Log.info(e.getMessage());
+                        return 0;
+                    } catch (SyncAbortException e) {
+                        // 用户选了「结束游戏」：不按同步失败处理，直接以退出码 1 收尾
+                        ui.finish(false, e.getMessage());
+                        Log.info(e.getMessage());
+                        return 1;
+                    } catch (Exception e) {
+                        Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
+                        FailurePrompt.Choice choice = askAfterFailure(options, ui, e);
+                        if (choice == null) {
+                            // 弹不出来（--no-gui、GUI 不可用）且带 --lenient：
+                            // 回到老行为，静默跳过本次同步，别把异常抛给 premain
+                            ui.finish(false, Text.of(Msg.SYNC_INTERRUPTED_SYNC_SKIPPED));
+                            Log.info(Text.of(Msg.SYNC_INTERRUPTED_SYNC_SKIPPED));
+                            return 0;
+                        }
+                        if (choice == FailurePrompt.Choice.RETRY) {
+                            // 上一次的取消标记不能带进新一轮；已下载的文件会在校验时跳过
+                            Cancels.clear();
+                            ui.stage(Text.of(Msg.RETRYING_SYNC));
+                            continue;
+                        }
+                        ui.finish(false, e.getMessage());
+                        if (choice == FailurePrompt.Choice.SKIP) {
+                            Log.info(Text.of(Msg.UPDATE_FAILED_SKIPPED_BY_PLAYER));
+                            return 0;
+                        }
+                        Log.info(Text.of(Msg.UPDATE_FAILED_CLOSED_BY_PLAYER));
+                        // 3 = 玩家主动关闭，Agent 会按这个码给出「已关闭」而不是「更新失败」
+                        return 3;
+                    }
                 }
-                ui.finish(true, summary);
-            } catch (CancelledException e) {
-                // 用户选了「跳过更新」：退出码 0，游戏照常启动，下次启动补齐
-                ui.finish(false, e.getMessage());
-                Log.info(e.getMessage());
-                return 0;
-            } catch (SyncAbortException e) {
-                // 用户选了「结束游戏」：不按同步失败处理，直接以退出码 1 收尾
-                ui.finish(false, e.getMessage());
-                Log.info(e.getMessage());
-                return 1;
-            } catch (Exception e) {
-                ui.finish(false, e.getMessage());
-                Log.error(Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
-                throw e;
             } finally {
                 // 只解除暂停：取消状态留着，让可能在收尾的下载线程看到并停下
                 Cancels.resume();
@@ -97,6 +125,39 @@ public final class Runner {
             System.err.println(Log.PREFIX + Text.of(Msg.SYNC_FAILED_2) + e.getMessage());
             return 1;
         }
+    }
+
+    /**
+     * 同步失败后问玩家怎么办
+     *
+     * 只有「图形界面可用 + 显式开启 + IO 失败」才弹窗：网络断了、服务器繁忙、下载中断
+     * 都属于 IO 失败。非 IO 失败一律丢回上层按失败收尾；弹不出窗时带 --lenient 就
+     * 返回 {@code null} 表示静默跳过，否则同样丢回上层。
+     *
+     * - `options`: 本次选项
+     * - `ui`: 进度窗口，弹窗拿它当父窗口
+     * - `cause`: 失败原因
+     *
+     * # 返回值
+     *
+     * 玩家的选择，见 {@link FailurePrompt.Choice}；{@code null} 表示自动跳过本次更新
+     */
+    private static FailurePrompt.Choice askAfterFailure(Options options, Progress ui, Exception cause)
+            throws Exception {
+        if (!(cause instanceof java.io.IOException)) {
+            throw cause;
+        }
+        boolean canPrompt = options.gui && options.askOnFailure
+                && !java.awt.GraphicsEnvironment.isHeadless() && !ProgressWindow.guiUnavailable();
+        if (!canPrompt) {
+            if (options.lenient) {
+                return null;
+            }
+            throw cause;
+        }
+        java.awt.Component parent = ui instanceof ProgressWindow
+                ? ((ProgressWindow) ui).frame() : null;
+        return FailurePrompt.ask(parent, cause.getMessage());
     }
 
     /**
@@ -166,6 +227,15 @@ public final class Runner {
                 options.quiet = true;
             } else if ("--lenient".equals(arg)) {
                 options.lenient = true;
+            } else if ("--ask-on-failure".equals(arg)) {
+                options.askOnFailure = true;
+            } else if (arg.startsWith("--ui-scale=")) {
+                String raw = arg.substring("--ui-scale=".length());
+                Double value = UiScale.parse(raw);
+                if (value == null) {
+                    throw new UsageException(Text.of(Msg.UI_SCALE_NEEDS_A_NUMBER, raw));
+                }
+                UiScale.override(value);
             } else if ("--no-gui".equals(arg)) {
                 options.gui = false;
             } else if ("--gui".equals(arg)) {
@@ -310,6 +380,7 @@ public final class Runner {
         System.out.println(Text.of(Msg.SKIP_OPTIONAL_MODS_NOT_TO_UPDATE_MANIFEST_RELATIVE_PATHS_REPEATABLE_OR_COMMA_SEPARATED));
         System.out.println(Text.of(Msg.SKIP_FILE_READ_SKIP_PATHS_FROM_A_UTF_8_FILE_ONE_PER_LINE));
         System.out.println(Text.of(Msg.NO_GUI_DO_NOT_SHOW_THE_PROGRESS_WINDOW));
+        System.out.println(Text.of(Msg.ASK_ON_FAILURE_PROMPT_FOR_A_CHOICE_WHEN_THE_UPDATE_FAILS));
         System.out.println(Text.of(Msg.NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL));
         System.out.println(Text.of(Msg.NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES));
         System.out.println(Text.of(Msg.UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON));
@@ -330,6 +401,7 @@ public final class Runner {
         System.out.println(Text.of(Msg.MML_SKIP_TRUE_SKIPS_THE_MML_LAUNCHER_DETECTION));
         System.out.println(Text.of(Msg.MANAGED_FILES_DROPPED_FROM_THE_NEW_MANIFEST_ARE_REMOVED_FILES_OUTSIDE_IT_ARE_UNTOUCHED));
         System.out.println(Text.of(Msg.LANGUAGE_NOTE));
+        System.out.println(Text.of(Msg.UI_SCALE_NOTE));
     }
 
     private static final class UsageException extends Exception {

@@ -67,6 +67,13 @@ final class Bootstrap {
                 }
             } else if (arg.startsWith("--update-index=")) {
                 index = arg.substring("--update-index=".length());
+            } else if (arg.startsWith("--ui-scale=")) {
+                // 基包的进度窗口在本方法里就建了，缩放要在建窗之前定下来；
+                // 更新包由独立类加载器加载，靠 UiScale 的 JVM 属性共享同一个倍数。
+                Double value = UiScale.parse(arg.substring("--ui-scale=".length()));
+                if (value != null) {
+                    UiScale.override(value);
+                }
             } else if ("--help".equals(arg) || "-h".equals(arg) || "--version".equals(arg)) {
                 // 只看用法 / 版本：不连网
                 quick = true;

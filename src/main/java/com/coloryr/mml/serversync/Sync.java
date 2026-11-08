@@ -26,9 +26,9 @@ import com.coloryr.mml.serversync.host.Progress;
 /** 一次服务器实例更新。 */
 final class Sync {
     /** 禁用后缀：与 MMC / HMCL 一致 */
-    private static final String DISABLED_SUFFIX = ".disabled";
+    private static final String DISABLED_SUFFIX = SyncRules.DISABLED_SUFFIX;
     /** 旧版禁用后缀，读取时仍认 */
-    private static final String LEGACY_DISABLE_SUFFIX = ".disable";
+    private static final String LEGACY_DISABLE_SUFFIX = SyncRules.LEGACY_DISABLE_SUFFIX;
 
     private final Options options;
     private final Downloader downloader;
@@ -50,6 +50,16 @@ final class Sync {
     private volatile OptionalModsDialog.Result lastChoice;
     /** 玩家是否勾过「以后不再显示」：没勾时每次启动都弹窗，勾了只在有新增或变化时弹 */
     private boolean promptSuppressed;
+    /** 本轮由发布端删除列表纳入的路径，用于区分「废弃删除」与「旧清单差异删除」 */
+    private final Set<String> retiredPaths = new java.util.HashSet<>();
+    /** 本轮的同步规则（删除列表与屏蔽规则）；未读到旁文件时为空规则 */
+    private SyncRules rules = SyncRules.empty();
+    /**
+     * 旁文件是否成功读取。默认 true：指纹命中与包版本未变两条快速路径不读旁文件，
+     * 但它们只做自选模组改名，不能因此停掉旧副本清理。只有读取失败才置 false，
+     * 此时本轮不执行任何删除，也不清空归档目录。
+     */
+    private boolean rulesAvailable = true;
 
     Sync(Options options, Progress ui) {
         this.options = options;
@@ -76,6 +86,22 @@ final class Sync {
      * 一句话结果，给进度窗口与日志用
      */
     String run() throws IOException {
+        try {
+            return runInner();
+        } catch (IOException e) {
+            // 游戏模式（javaagent 会带 --lenient）：服务器掉线、繁忙、传输中断都只跳过本次同步。
+            // 这里不能把异常抛给 premain —— 那会让 JVM 直接终止，游戏根本起不来。
+            // 开了 --ask-on-failure 时交给 Runner 弹窗，由玩家决定重试还是跳过。
+            if (!options.lenient || options.askOnFailure) {
+                throw e;
+            }
+            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            Log.error(Text.of(Msg.SYNC_INTERRUPTED_SKIPPING_THIS_SYNC, reason));
+            return Text.of(Msg.SYNC_INTERRUPTED_SYNC_SKIPPED);
+        }
+    }
+
+    private String runInner() throws IOException {
         String manifestUrl;
         byte[] data;
         Manifest current;
@@ -101,7 +127,8 @@ final class Sync {
             current.resolveUrls(manifestUrl);
         } catch (IOException e) {
             // 清单没拉到等于一个文件都没动：游戏模式只记日志，别让服务器掉线锁死启动
-            if (!options.lenient) {
+            // （--ask-on-failure 时抛给 Runner 弹窗，让玩家选重试还是跳过）
+            if (!options.lenient || options.askOnFailure) {
                 throw e;
             }
             Log.error(Text.of(Msg.MANIFEST_FETCH_FAILED_SKIPPING_THIS_SYNC) + e.getMessage());
@@ -138,6 +165,9 @@ final class Sync {
             String prompted = promptOnUnchanged(current, changedOptionals.size(), manifestUrl);
             return prompted == null ? summary : prompted;
         }
+
+        // 两条提前返回都不读旁文件：删除列表与屏蔽规则只在真正执行同步时生效
+        rules = fetchSyncRules(manifestUrl);
 
         ui.stage(Text.of(Msg.CHECKING_LOCAL_FILES));
         validate(current);
@@ -234,14 +264,19 @@ final class Sync {
             checkCancelled();
             Path target = Fs.resolveSafe(options.gameDir, plan.item.dir);
             if (plan.item.deleteOld && Fs.isEmptyZip(plan.temp)) {
-                // 空包 + 覆盖 = 显式删除该目录（发布端用它替代「删条目」）
-                Fs.deleteDirectory(target);
-                info(Text.of(Msg.EMPTY_ARCHIVE_REMOVES_DIR, plan.item.dir));
+                // 空包 + 覆盖 = 显式删除该目录（发布端用它替代「删条目」）。
+                // 启用屏蔽规则时整目录删除无法保证「屏蔽项不动」，按约定不执行。
+                if (canRemoveDirectory(plan.item.dir)) {
+                    Fs.deleteDirectory(target);
+                    info(Text.of(Msg.EMPTY_ARCHIVE_REMOVES_DIR, plan.item.dir));
+                }
             } else {
                 if (plan.item.deleteOld) {
-                    Fs.deleteDirectory(target);
+                    clearArchiveDirectory(plan.item.dir, target);
                 }
-                Fs.extractZip(plan.temp, target, false);
+                // 归档里的条目同样不能覆盖屏蔽项：整目录覆盖时也要让屏蔽规则生效
+                Fs.extractZip(plan.temp, target, false,
+                        name -> rules.isIgnored(plan.item.dir + "/" + name));
                 info(Text.of(Msg.EXTRACTING_CONFIG_TARGET, plan.item.dir));
             }
             Files.deleteIfExists(plan.temp);
@@ -335,7 +370,7 @@ final class Sync {
      */
     private void reconcileOptionalFiles(Manifest current) throws IOException {
         for (Manifest.FileEntry item : current.files) {
-            if (!item.optional) {
+            if (!item.optional || rules.isIgnored(item.path)) {
                 continue;
             }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
@@ -350,7 +385,8 @@ final class Sync {
                 info(Text.of(Msg.OPTIONAL_RENAMED, existing.getFileName().toString(),
                         desired.getFileName().toString()));
             }
-            if (!options.noDelete) {
+            // 旁文件不可用时只改名不删旧副本：无法确认被保护的范围
+            if (!options.noDelete && rulesAvailable) {
                 Path stale = selected ? withSuffix(target, DISABLED_SUFFIX) : target;
                 if (!stale.equals(desired) && !stale.equals(existing)) {
                     Files.deleteIfExists(stale);
@@ -438,6 +474,10 @@ final class Sync {
                 continue;
             }
             Boolean recorded = state.selected(item.path);
+            if (recorded == null) {
+                // 换版本的同一模组路径变了：沿用同族上一次的选择，别把玩家的停用改成启用
+                recorded = state.inherited(item.path);
+            }
             boolean selected;
             if (options.skip.contains(item.path)) {
                 selected = false;
@@ -732,6 +772,32 @@ final class Sync {
         return !b.isEmpty() && a.equals(b);
     }
 
+    /**
+     * 取清单同目录下的同步规则旁文件。
+     *
+     * 读到且能解析：按规则执行。其余任何情况（404、超时、5xx、返回网页、JSON 坏）
+     * 都按「规则不可用」处理：不阻断同步，但本轮不执行任何文件删除，
+     * 避免在无法确认屏蔽范围时误删玩家文件。
+     *
+     * 归档解压不受这条门禁约束：`Over=true` 是「整包替换目录」的语义，
+     * 与逐文件删除无关，见 {@link #clearArchiveDirectory}。
+     */
+    private SyncRules fetchSyncRules(String manifestUrl) {
+        try {
+            SyncRules loaded = SyncRules.parse(downloader.fetchQuiet(manifestUrl + ".sync.json"));
+            rulesAvailable = true;
+            info(Text.of(Msg.SYNC_RULES_LOADED, loaded.removed.size(), loaded.ignoreCount()));
+            return loaded;
+        } catch (IOException | RuntimeException e) {
+            rulesAvailable = false;
+            String reason = e.getMessage() == null || e.getMessage().trim().isEmpty()
+                    ? e.getClass().getSimpleName() : e.getMessage();
+            info(Text.of(Msg.SYNC_RULES_UNAVAILABLE, reason));
+            info(Text.of(Msg.SIDECAR_UNAVAILABLE_NO_DELETE));
+            return SyncRules.empty();
+        }
+    }
+
     private void validate(Manifest manifest) throws IOException {
         for (Manifest.FileEntry item : manifest.files) {
             Fs.resolveSafe(options.gameDir, item.path);
@@ -747,6 +813,74 @@ final class Sync {
 
     private void planRemovals(Manifest old, Manifest current, Set<String> files, List<String> dirs,
                               String selfJar) {
+        retiredPaths.clear();
+        // 旁文件没读到：无法确认屏蔽范围，本轮一条都不删（下载照常）
+        if (!rulesAvailable) {
+            return;
+        }
+        Set<String> live = new java.util.HashSet<>();
+        for (Manifest.FileEntry item : current.files) {
+            live.add(Fs.pathKey(item.path));
+        }
+        // 归档目录内的文件由压缩包负责：条目已从清单移除、但归档未重解压时删了不会补回来
+        List<String> archiveDirs = new ArrayList<>();
+        for (Manifest.ArchiveEntry item : current.archives) {
+            String dir = Fs.pathKey(item.dir);
+            if (!dir.isEmpty()) {
+                archiveDirs.add(dir);
+            }
+        }
+        String selfKey = Fs.pathKey(selfJar);
+
+        // 删除列表与本地同步记录无关：首次同步、跨版本升级都能一次收敛。
+        // 清单里仍存在的路径绝不删（含其 .disabled 副本），避免大小写或禁用后缀造成「刚下载就被删」。
+        int retired = 0;
+        int liveHit = 0;
+        int ignoreHit = 0;
+        int archiveHit = 0;
+        Set<String> queued = new java.util.HashSet<>();
+        for (String path : rules.removed) {
+            String key = Fs.pathKey(path);
+            if (key.isEmpty()) {
+                info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
+                continue;
+            }
+            if (live.contains(key) || live.contains(SyncRules.stripDisabledSuffix(key))) {
+                liveHit++;
+                continue;
+            }
+            if (!selfKey.isEmpty() && key.equals(selfKey)) {
+                continue;
+            }
+            if (rules.isIgnored(key)) {
+                ignoreHit++;
+                continue;
+            }
+            if (insideArchive(key, archiveDirs)) {
+                archiveHit++;
+                continue;
+            }
+            Path target = safeRemovalTarget(path);
+            // 只处理清单里那个名字：玩家停用的 .disabled 副本不在删除范围内，
+            // 因此只有该名字存在时才排进计划；删除列表可以长期挂在发布端。
+            if (target == null || !Files.isRegularFile(target) || !queued.add(key)) {
+                continue;
+            }
+            retiredPaths.add(path);
+            files.add(path);
+            retired++;
+        }
+        info(Text.of(Msg.RETIRED_PLAN_COUNT, retired));
+        if (liveHit > 0) {
+            info(Text.of(Msg.RETIRED_SKIPPED_LIVE, liveHit));
+        }
+        if (ignoreHit > 0) {
+            info(Text.of(Msg.RETIRED_SKIPPED_IGNORE, ignoreHit));
+        }
+        if (archiveHit > 0) {
+            info(Text.of(Msg.RETIRED_SKIPPED_ARCHIVE, archiveHit));
+        }
+
         if (old == null) {
             return;
         }
@@ -754,12 +888,34 @@ final class Sync {
         for (Manifest.FileEntry item : current.files) {
             byIdentity.put(item.identity(), item);
         }
+        int protectedCount = 0;
+        int archiveProtected = 0;
         for (Manifest.FileEntry item : old.files) {
             Manifest.FileEntry replacement = byIdentity.get(item.identity());
-            if ((replacement == null || !replacement.path.equals(item.path))
-                    && !item.path.equals(selfJar)) {
+            if (replacement != null && replacement.path.equals(item.path)) {
+                continue;
+            }
+            if (rules.isIgnored(item.path)) {
+                protectedCount++;
+                continue;
+            }
+            String key = Fs.pathKey(item.path);
+            if (key.isEmpty() || key.equals(selfKey)) {
+                continue;
+            }
+            if (insideArchive(key, archiveDirs)) {
+                archiveProtected++;
+                continue;
+            }
+            if (queued.add(key)) {
                 files.add(item.path);
             }
+        }
+        if (protectedCount > 0) {
+            info(Text.of(Msg.IGNORE_SKIPPED_REMOVAL, protectedCount));
+        }
+        if (archiveProtected > 0) {
+            info(Text.of(Msg.ARCHIVE_SKIPPED_REMOVAL, archiveProtected));
         }
         // 从清单里移除压缩包条目**不再删除**已解压目录：条目消失无法表达「要删」的意图，
         // 而且会把玩家改过的 config 一起删掉。需要清理时保留/新增 Over=true 的包，
@@ -767,11 +923,90 @@ final class Sync {
         dirs.sort(Comparator.comparingInt((String dir) -> -depth(dir)));
     }
 
+    /** 路径是否落在任一归档解压目录内（含目录本身） */
+    private static boolean insideArchive(String key, List<String> archiveDirs) {
+        for (String dir : archiveDirs) {
+            if (key.equals(dir) || Fs.under(key, dir)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 空压缩包删除目录是否执行。
+     *
+     * 旁文件不可用时一律不删；存在屏蔽规则时整目录删除无法保证「屏蔽项不动」，
+     * 按约定跳过——需要屏蔽的实例通常也不使用「空包删除目录」这一形态。
+     */
+    private boolean canRemoveDirectory(String dir) {
+        if (!rulesAvailable) {
+            info(Text.of(Msg.EMPTY_ARCHIVE_SKIPPED_UNAVAILABLE, dir));
+            return false;
+        }
+        if (rules.ignoreCount() > 0) {
+            info(Text.of(Msg.EMPTY_ARCHIVE_SKIPPED_IGNORE, dir));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * `Over=true` 归档解压前清理旧目录：屏蔽规则命中的文件保留，其余删除。
+     * 旁文件不可用时不清空，只覆盖同名文件，避免误删无法确认的路径。
+     */
+    private void clearArchiveDirectory(String dir, Path target) throws IOException {
+        // 归档是「整包替换目录」的语义，不属于逐文件删除：这里始终按旧行为清空。
+        // 旁文件可用时保留屏蔽项；不可用时按旧行为整目录清空，兼容其他整合包的 zip 用法。
+        if (!rulesAvailable || rules.ignoreCount() == 0) {
+            Fs.deleteDirectory(target);
+            return;
+        }
+        int kept = Fs.deleteDirectory(target, options.gameDir, key -> rules.isIgnored(key));
+        if (kept > 0) {
+            info(Text.of(Msg.ARCHIVE_KEPT_PROTECTED, dir, kept));
+        }
+    }
+
+    /** 删除列表只接受精确文件相对路径；目录、通配与越界写法一律拒绝 */
+    private Path safeRemovalTarget(String path) {
+        String value = path == null ? "" : path.trim();
+        if (value.isEmpty() || value.endsWith("/") || value.endsWith("\\")
+                || value.indexOf('*') >= 0 || value.indexOf('?') >= 0) {
+            info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
+            return null;
+        }
+        try {
+            return Fs.resolveSafe(options.gameDir, value);
+        } catch (IOException | RuntimeException e) {
+            info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
+            return null;
+        }
+    }
+
     private void applyRemovals(Set<String> files, List<String> dirs) throws IOException {
+        if (!rulesAvailable) {
+            return;
+        }
         for (String path : files) {
+            // 兜底：任何删除入口都不得越过屏蔽规则
+            if (rules.isIgnored(path)) {
+                continue;
+            }
             Path target = Fs.resolveSafe(options.gameDir, path);
+            if (Files.isDirectory(target)) {
+                info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
+                continue;
+            }
             Fs.deleteFile(target);
-            info(Text.of(Msg.REMOVING_OLD_FILE_PATH, path));
+            Msg reason = retiredPaths.contains(path)
+                    ? Msg.REMOVING_RETIRED_FILE : Msg.REMOVING_OLD_FILE_PATH;
+            info(Text.of(reason, path));
+            // 玩家停用的副本不动：保留文件，重新启用时不必重新下载
+            if (Files.isRegularFile(withSuffix(target, DISABLED_SUFFIX))
+                    || Files.isRegularFile(withSuffix(target, LEGACY_DISABLE_SUFFIX))) {
+                info(Text.of(Msg.RETIRED_KEPT_DISABLED, path));
+            }
         }
         for (String dir : dirs) {
             Path target = Fs.resolveSafe(options.gameDir, dir);
@@ -791,9 +1026,15 @@ final class Sync {
      * - `current`: 远程清单
      * - `selfJar`: 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
      */
-    private List<PlannedFile> changedFiles(Manifest current, String selfJar) throws IOException {
+    private List<PlannedFile> changedFiles(Manifest current, String selfJar)
+            throws IOException {
         List<PlannedFile> out = new ArrayList<>();
+        int ignored = 0;
         for (Manifest.FileEntry item : current.files) {
+            if (rules.isIgnored(item.path)) {
+                ignored++;
+                continue;
+            }
             // 更新器自身在运行中无法被覆盖（Windows 文件锁）：升级走自更新通道
             if (item.path.equals(selfJar)) {
                 info(Text.of(Msg.SELF_JAR_SKIPPED, item.path));
@@ -810,6 +1051,9 @@ final class Sync {
                 continue;
             }
             out.add(new PlannedFile(item, target));
+        }
+        if (ignored > 0) {
+            info(Text.of(Msg.IGNORE_SKIPPED_DOWNLOAD, ignored));
         }
         return out;
     }
@@ -1007,9 +1251,21 @@ final class Sync {
                            List<String> removedDirs) {
         info(Text.of(Msg.PLAN_MANIFEST,
                 current.name.isEmpty() ? Text.of(Msg.UNNAMED) : current.name, current.packVersion));
-        info(Text.of(Msg.PLAN_REMOVE_FILES, removedFiles.size()));
-        for (String path : removedFiles) {
+        info(Text.of(Msg.PLAN_RETIRED_FILES, retiredPaths.size()));
+        for (String path : retiredPaths) {
             info("  - " + path);
+        }
+        int otherRemovals = 0;
+        for (String path : removedFiles) {
+            if (!retiredPaths.contains(path)) {
+                otherRemovals++;
+            }
+        }
+        info(Text.of(Msg.PLAN_REMOVE_FILES, otherRemovals));
+        for (String path : removedFiles) {
+            if (!retiredPaths.contains(path)) {
+                info("  - " + path);
+            }
         }
         info(Text.of(Msg.PLAN_REMOVE_DIRS, removedDirs.size()));
         for (String dir : removedDirs) {
@@ -1110,6 +1366,20 @@ final class Sync {
             }
         } finally {
             pool.shutdownNow();
+            try {
+                pool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            // 被取消的下载来不及走自己的清理（线程被打断、进程可能马上退出），这里兜底删一遍
+            for (DownloadTask task : tasks) {
+                try {
+                    Files.deleteIfExists(task.target.resolveSibling(
+                            task.target.getFileName().toString() + ".part"));
+                } catch (IOException ignored) {
+                    // 删不掉只是留个临时文件，下次同步会覆盖
+                }
+            }
         }
         return finished.get();
     }

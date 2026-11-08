@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -59,10 +61,47 @@ final class Fs {
         return target;
     }
 
+    /**
+     * 路径比较用的规范键：统一分隔符、折叠大小写、去掉 `./` 与空段。
+     *
+     * 只用于比较，不用于落盘：返回的是小写键，在区分大小写的文件系统上不能直接解析。
+     * 绝对路径、盘符与含 `..` 的写法返回空串，由调用方按无效路径处理。
+     *
+     * # 返回值
+     *
+     * 规范键；路径无效或越界时返回空串
+     */
+    static String pathKey(String raw) {
+        String value = raw == null ? "" : raw.trim().replace('\\', '/');
+        if (value.isEmpty() || value.startsWith("/")
+                || (value.length() >= 2 && value.charAt(1) == ':'
+                && Character.isLetter(value.charAt(0)))) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(value.length());
+        for (String part : value.split("/")) {
+            if (part.isEmpty() || ".".equals(part)) {
+                continue;
+            }
+            if ("..".equals(part)) {
+                return "";
+            }
+            if (out.length() > 0) {
+                out.append('/');
+            }
+            out.append(part);
+        }
+        return out.toString().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * 只删这一个文件。
+     *
+     * 玩家手动停用的 `.disabled` / `.disable` 副本一律保留：那是玩家的选择，
+     * 而且保留文件可以让「以后重新启用」不必重新下载。
+     */
     static void deleteFile(Path file) throws IOException {
         Files.deleteIfExists(file);
-        Files.deleteIfExists(java.nio.file.Paths.get(file.toString() + ".disable"));
-        Files.deleteIfExists(java.nio.file.Paths.get(file.toString() + ".disabled"));
     }
 
     static void deleteDirectory(Path dir) throws IOException {
@@ -87,6 +126,53 @@ final class Fs {
         });
     }
 
+    /**
+     * 删除目录，但跳过 `keep` 判定为真的文件；目录里还有被保护文件时保留该目录。
+     *
+     * - `dir`: 要清理的目录
+     * - `root`: 游戏目录，用于算出相对路径交给 `keep`
+     * - `keep`: 入参是相对 `root` 的路径键，返回 true 表示保留
+     *
+     * # 返回值
+     *
+     * 被保留的文件数
+     */
+    static int deleteDirectory(Path dir, Path root, Predicate<String> keep) throws IOException {
+        if (!Files.exists(dir)) {
+            return 0;
+        }
+        Path base = root.toAbsolutePath().normalize();
+        final int[] kept = {0};
+        Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                String key = pathKey(base.relativize(file.toAbsolutePath().normalize()).toString());
+                if (!key.isEmpty() && keep.test(key)) {
+                    kept[0]++;
+                    return FileVisitResult.CONTINUE;
+                }
+                Files.deleteIfExists(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path directory, IOException exc) throws IOException {
+                if (exc != null) {
+                    throw exc;
+                }
+                try (Stream<Path> children = Files.list(directory)) {
+                    if (children.findAny().isPresent()) {
+                        // 还有被保护的文件：目录必须留下
+                        return FileVisitResult.CONTINUE;
+                    }
+                }
+                Files.deleteIfExists(directory);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return kept[0];
+    }
+
     /** zip 里没有任何文件或目录条目；用于「空包 + Over=true = 删除目录」的显式删除 */
     static boolean isEmptyZip(Path zip) throws IOException {
         try (ZipFile file = new ZipFile(zip.toFile(), java.nio.charset.StandardCharsets.UTF_8)) {
@@ -95,6 +181,16 @@ final class Fs {
     }
 
     static void extractZip(Path zip, Path target, boolean base) throws IOException {
+        extractZip(zip, target, base, null);
+    }
+
+    /**
+     * 解压 zip；`skip` 判定为真的条目不解压（仍做越界校验），用于让屏蔽规则盖住归档内容。
+     *
+     * - `skip`: 入参是压缩包内的条目名；为 null 表示全部解压
+     */
+    static void extractZip(Path zip, Path target, boolean base, Predicate<String> skip)
+            throws IOException {
         if (!zip.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
             throw new IOException(Text.of(Msg.ONLY_ZIP_ARCHIVES_ARE_SUPPORTED) + zip);
         }
@@ -123,6 +219,9 @@ final class Fs {
                 Path out = resolveSafe(target, name);
                 if (entry.isDirectory()) {
                     Files.createDirectories(out);
+                    continue;
+                }
+                if (skip != null && skip.test(name)) {
                     continue;
                 }
                 Files.createDirectories(out.getParent());
