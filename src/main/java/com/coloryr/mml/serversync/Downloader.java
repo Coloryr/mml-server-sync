@@ -146,25 +146,29 @@ final class Downloader {
         Files.createDirectories(target.toAbsolutePath().normalize().getParent());
         Path temp = target.resolveSibling(target.getFileName() + ".part");
         IOException last = null;
-        for (int attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
-            try {
-                return downloadOnce(url, target, temp, sha1, sha256);
-            } catch (VerifyException e) {
-                // 文件下完了但哈希不对：换一次连接也可能还是坏内容，不重试
-                throw e;
-            } catch (IOException e) {
-                last = e;
-                Files.deleteIfExists(temp);
-                if (attempt < DOWNLOAD_ATTEMPTS) {
-                    if (!quiet) {
-                        Log.info(Text.of(Msg.DOWNLOAD_RETRY, attempt, target.getFileName(),
-                                describe(e)));
+        try {
+            for (int attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+                try {
+                    return downloadOnce(url, target, temp, sha1, sha256);
+                } catch (VerifyException e) {
+                    // 文件下完了但哈希不对（常见于传输中断、只收到半截）：换一次连接也没用
+                    throw e;
+                } catch (IOException e) {
+                    last = e;
+                    if (attempt < DOWNLOAD_ATTEMPTS) {
+                        if (!quiet) {
+                            Log.info(Text.of(Msg.DOWNLOAD_RETRY, attempt, target.getFileName(),
+                                    describe(e)));
+                        }
+                        sleep(400L * attempt);
                     }
-                    sleep(400L * attempt);
                 }
             }
+            throw last == null ? new IOException(Text.of(Msg.DOWNLOAD_FAILED)) : last;
+        } finally {
+            // 成功时临时文件已被移走；失败、取消、线程被中断都不能留下半截文件
+            Files.deleteIfExists(temp);
         }
-        throw last == null ? new IOException(Text.of(Msg.DOWNLOAD_FAILED)) : last;
     }
 
     /** 下载一次；失败时由调用方决定是否重试 */

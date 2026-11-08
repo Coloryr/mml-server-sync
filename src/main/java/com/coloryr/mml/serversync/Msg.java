@@ -203,6 +203,8 @@ enum Msg {
     REMOVING_OLD_DIR("删除旧配置目录: %s", "Removing old config directory: %s"),
     SYNC_RULES_ROOT_INVALID("同步规则旁文件的根节点不是 JSON 对象", "Sync rules sidecar root is not a JSON object"),
     SYNC_RULES_LOADED("同步规则：历史废弃 %s 条，屏蔽规则 %s 条", "Sync rules: %s retired path(s), %s ignore rule(s)"),
+    SYNC_INTERRUPTED_SKIPPING_THIS_SYNC("同步中断，本次跳过（状态未写入，下次启动重试）: %s", "Sync interrupted, skipping this run (state untouched, retried next launch): %s"),
+    SYNC_INTERRUPTED_SYNC_SKIPPED("下载中断，本次同步已跳过，下次启动会重试", "Download interrupted, sync skipped; it will retry next launch"),
     RETIRED_KEPT_DISABLED("保留玩家停用的副本: %s", "Kept the disabled copy: %s"),
     SYNC_RULES_UNAVAILABLE("同步规则旁文件不可用，本次按无规则处理: %s", "Sync rules sidecar unavailable, proceeding without rules: %s"),
     SYNC_RULES_BAD_PATH("删除列表跳过不安全路径: %s", "Retired list skipped unsafe path: %s"),

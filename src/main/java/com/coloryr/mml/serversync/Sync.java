@@ -86,6 +86,21 @@ final class Sync {
      * 一句话结果，给进度窗口与日志用
      */
     String run() throws IOException {
+        try {
+            return runInner();
+        } catch (IOException e) {
+            // 游戏模式（javaagent 会带 --lenient）：服务器掉线、繁忙、传输中断都只跳过本次同步。
+            // 这里不能把异常抛给 premain —— 那会让 JVM 直接终止，游戏根本起不来。
+            if (!options.lenient) {
+                throw e;
+            }
+            Log.error(Text.of(Msg.SYNC_INTERRUPTED_SKIPPING_THIS_SYNC)
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+            return Text.of(Msg.SYNC_INTERRUPTED_SYNC_SKIPPED);
+        }
+    }
+
+    private String runInner() throws IOException {
         String manifestUrl;
         byte[] data;
         Manifest current;
@@ -1345,6 +1360,20 @@ final class Sync {
             }
         } finally {
             pool.shutdownNow();
+            try {
+                pool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            // 被取消的下载来不及走自己的清理（线程被打断、进程可能马上退出），这里兜底删一遍
+            for (DownloadTask task : tasks) {
+                try {
+                    Files.deleteIfExists(task.target.resolveSibling(
+                            task.target.getFileName().toString() + ".part"));
+                } catch (IOException ignored) {
+                    // 删不掉只是留个临时文件，下次同步会覆盖
+                }
+            }
         }
         return finished.get();
     }
