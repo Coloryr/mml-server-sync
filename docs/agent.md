@@ -20,12 +20,13 @@
 2. 拉清单：网络故障、404、清单格式错时**只记日志并跳过本次同步**，游戏照常启动——
    这时一个文件都还没动过。
 3. 同步：文件下载失败、哈希不匹配等会中止启动，不会带着半套文件进服。
-4. `PackVersion` 与上次相同（且没给 `--force`）时直接跳过。
+4. `server.json.sha1` 与本地清单一致（且没给 `--force`）时直接跳过；
+   变了就按新清单同步，不再看 `PackVersion`。
 
 进度窗会先尝试创建：安卓启动器（FCL / Zalith / PojavLauncher）的 AWT 由 cacio 的
 javaagent 提供，而它排在同步 agent 之后，premain 里初始化 Swing 通常会落到 X11 并失败。
 失败时只记一行日志，然后按无界面继续同步，不会再因为弹窗问题中止启动；
-自选模组按无界面规则安装（无记录时禁用）。
+自选模组按无界面规则处理（无记录时不下载，已有选择按记录执行）。
 
 ## 工作目录与状态目录
 
@@ -42,7 +43,7 @@ javaagent 提供，而它排在同步 agent 之后，premain 里初始化 Swing 
 | `mml.serverSync.gameDir` | `MML_SERVER_SYNC_GAME_DIR` | 游戏目录；工作目录不是 `.minecraft` 时用 |
 | `mml.serverSync.stateDir` | `MML_SERVER_SYNC_STATE_DIR` | 状态目录，默认 `<game-dir>/.mml-server-sync` |
 | `mml.serverSync.log` | — | 日志文件路径，默认 `<状态目录>/mml-server-sync.log` |
-| `mml.serverSync.force` | `MML_SERVER_SYNC_FORCE` | 忽略 `PackVersion`，强制同步 |
+| `mml.serverSync.force` | `MML_SERVER_SYNC_FORCE` | 忽略清单指纹，强制同步 |
 | `mml.serverSync.threads` | — | 同时下载的文件数，1–64，默认 16 |
 | `mml.serverSync.gui` | `MML_SERVER_SYNC_NO_GUI` | 进度窗开关；`gui=false` 或设了 `NO_GUI` 时关闭 |
 | `mml.serverSync.noAsk` | `MML_SERVER_SYNC_NO_ASK` | 关闭自选模组弹窗（默认允许弹窗） |

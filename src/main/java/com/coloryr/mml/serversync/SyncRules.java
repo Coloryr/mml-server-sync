@@ -11,8 +11,12 @@ import java.util.regex.Pattern;
 
 /**
  * 发布端旁文件 `server.json.sync.json`：累积废弃路径与屏蔽规则。
+ *
+ * 这不是 MML 的清单设计：MML 只生成 `server.json`（含可选模组与四种配置方式），
+ * 不会生成或读取本旁文件。它是本更新器的扩展能力，长期方案优先使用
+ * `Archives` 压缩包同步，逐文件模式再按需使用。
  * 规则语义与发布端 `excludePatterns` 一致：目录前缀、通配、精确匹配，一律忽略大小写。
- * 旁文件缺失或格式错误时按空规则处理，不改变原有同步行为。
+ * 旁文件缺失时按空规则处理，保留旧清单删除行为。
  */
 final class SyncRules {
     /** 禁用后缀：与 MMC / HMCL 一致 */

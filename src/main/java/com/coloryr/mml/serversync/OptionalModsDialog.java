@@ -33,7 +33,7 @@ import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableColumnModel;
 
 /**
- * 自选模组勾选窗：列出全部自选模组，勾选决定启用还是禁用。
+ * 自选模组勾选窗：列出全部自选模组，勾选决定这次是否下载/更新。
  *
  * 用表格而不是一列复选框：条目多时要有表头与滚动条，名称 / 介绍 / 状态各占一列才对得齐。
  * 点整行任意位置都能翻勾选状态，空格也可以。关窗、Esc 与「确定」同义：

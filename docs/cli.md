@@ -32,18 +32,18 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `--game-dir, -g` | 游戏目录；mods、config 等写到这里 |
 | `--base-dir` | 基础包解压根目录；默认 `.minecraft` 的父目录，否则同游戏目录 |
 | `--state-dir` | 状态目录；默认 `<game-dir>/.mml-server-sync` |
-| `--force` | `PackVersion` 相同也强制同步（也不看清单指纹） |
+| `--force` | 忽略清单指纹，强制重新读取清单并同步 |
 | `--dry-run` | 只打印计划，不下载、不删除、不解压，也不弹窗 |
 | `--no-delete` | 不删除旧清单里已移除的受管文件 / 目录 |
 | `--quiet` | 少输出 |
 | `--log` | 日志文件；默认 `<state-dir>/mml-server-sync.log` |
 | `--threads` | 同时下载的文件数，1–64；默认 16 |
-| `--skip` | 这次不启用的自选模组，清单相对路径；可重复或逗号分隔 |
+| `--skip` | 这次不下载/更新的自选模组，清单相对路径；可重复或逗号分隔 |
 | `--skip-file` | 从文件读要跳过的路径，UTF-8，一行一个，`#` 开头忽略 |
 | `--no-gui` / `--gui` | 关 / 开进度窗口（默认开，headless 自动关） |
 | `--ask-on-failure` | 更新失败时弹窗询问：重试 / 跳过本次更新 / 关闭游戏（Agent 在图形界面可用时默认开启） |
 | `--ui-scale` | 界面缩放倍数，仅支持 `--ui-scale=2.5` 写法；桌面默认 1.0，移动启动器自动放大 |
-| `--no-ask` | 不弹自选模组勾选窗（无记录时按禁用安装） |
+| `--no-ask` | 不弹自选模组勾选窗（无记录时跳过，不下载） |
 | `--no-update` / `--update` | 关 / 开自更新（默认开） |
 | `--update-index` | 自更新索引地址；默认项目主页的 `index.json` |
 | `--curseforge-api-key` | CurseForge API Key；缺省读环境变量 `CURSEFORGE_API_KEY` |
@@ -58,7 +58,7 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 
 | 退出码 | 含义 |
 | --- | --- |
-| `0` | 成功；或版本未变 / 清单指纹命中而跳过；或取消时选了「跳过更新」 |
+| `0` | 成功；或清单指纹命中而跳过；或取消时选了「跳过更新」 |
 | `1` | 同步失败；或取消时选了「结束游戏」 |
 | `2` | 参数错误 |
 | `3` | 更新失败提示框里选了「关闭游戏」（Agent 会据此中止启动） |
@@ -103,4 +103,4 @@ java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft -
 ```
 
 `--dry-run` 会打印：清单名 / 版本、将删除的文件与目录、需要检查的文件数、本次新增或
-内容变化的可选模组及其启用 / 禁用计划。它不会下载、删除、解压，也不会写状态文件。
+内容变化的可选模组及其更新 / 跳过计划。它不会下载、删除、解压，也不会写状态文件。

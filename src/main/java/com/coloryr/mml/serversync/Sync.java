@@ -40,7 +40,7 @@ final class Sync {
     private volatile Manifest manifest;
     /** 自选模组的上次选择状态 */
     private OptionalState.Loaded optionalState = new OptionalState.Loaded(true);
-    /** 本次的自选模组勾选：路径 → 是否启用；事件线程（弹窗）与同步线程都会读写 */
+    /** 本次的自选模组勾选：路径 → 是否下载/更新；事件线程（弹窗）与同步线程都会读写 */
     private final Map<String, Boolean> selections = new ConcurrentHashMap<>();
     /** 发布端写的自选模组简介：路径 → 文字；取不到时为空 */
     private Map<String, String> optionalNotes = Collections.emptyMap();
@@ -55,9 +55,9 @@ final class Sync {
     /** 本轮的同步规则（删除列表与屏蔽规则）；未读到旁文件时为空规则 */
     private SyncRules rules = SyncRules.empty();
     /**
-     * 旁文件是否成功读取。默认 true：指纹命中与包版本未变两条快速路径不读旁文件，
-     * 但它们只做自选模组改名，不能因此停掉旧副本清理。只有读取失败才置 false，
-     * 此时本轮不执行任何删除，也不清空归档目录。
+     * 旁文件是否可用。默认 true：指纹命中的快速路径不读旁文件，只处理自选模组；
+     * 只有读取失败、返回网页或 JSON 损坏才置 false，此时本轮不执行逐文件删除。
+     * 旁文件不存在（404）按空规则处理，仍然保持 MML 原生的删除行为。
      */
     private boolean rulesAvailable = true;
 
@@ -158,13 +158,9 @@ final class Sync {
         } else {
             info(Text.of(Msg.LOCAL_REMOTE_VERSION, packVersionOf(old), packVersionOf(current)));
         }
-        if (!options.force && sameVersion(old, current)) {
-            info(Text.of(Msg.PACK_VERSION_UNCHANGED_DETAIL, current.packVersion));
-            String summary = Text.of(Msg.PACK_VERSION_UNCHANGED_SKIPPING_SYNC);
-            // 版本没变照样要弹：玩家每次启动都该有一次改选的机会，选完当场归位
-            String prompted = promptOnUnchanged(current, changedOptionals.size(), manifestUrl);
-            return prompted == null ? summary : prompted;
-        }
+        // 清单指纹已经在这之前比过：指纹变了就按新清单同步，不再用 PackVersion 短路。
+        // 与 MML 的原生行为对齐，发布端改了清单内容但忘记递增版本号时也能收敛。
+        // 指纹命中的快速路径在 manifestUnchanged() 里已经返回。
 
         // 两条提前返回都不读旁文件：删除列表与屏蔽规则只在真正执行同步时生效
         rules = fetchSyncRules(manifestUrl);
@@ -200,6 +196,10 @@ final class Sync {
         } else {
             info(Text.of(Msg.NO_DELETE_SKIPPED, removedFiles.size(), removedDirs.size()));
         }
+
+        // 下载计划必须用最终勾选：弹窗是异步打开的，先在这里等玩家确认，
+        // 否则没勾的模组可能已经在后台被下载了。
+        applyOptionalChoices(current);
 
         boolean needBase = current.base != null && (old == null || old.base == null);
         List<PlannedFile> files = changedFiles(current, selfJar);
@@ -284,8 +284,9 @@ final class Sync {
         }
 
         checkCancelled();
-        // 自选模组收尾：等后台弹窗的确认结果，然后按勾选把文件归位，之后才写状态、放行启动
-        applyOptionalChoices(current);
+        // 换路径的旧自选模组必须在勾选确认后再删：自动弹窗是异步的，
+        // planRemovals 执行时选择可能还没定。
+        cleanupReplacedOptionals(old, current);
 
         ui.stage(Text.of(Msg.SAVING_STATE));
         saveState(data);
@@ -294,8 +295,8 @@ final class Sync {
     }
 
     /**
-     * 自选模组收尾：仍开着的弹窗在这里等玩家确认；结果并进勾选后按名字归位。
-     * 必须发生在 saveState 之前，否则中断后指纹命中会跳过收尾，改名就再也不会执行。
+     * 等自选模组弹窗确认，把结果并进本次勾选。
+     * 必须发生在 changedFiles 之前：没勾的模组不能被后台提前下载。
      */
     private void applyOptionalChoices(Manifest current) throws IOException {
         PendingChoice pending = pendingDialog.get();
@@ -311,6 +312,55 @@ final class Sync {
         checkCancelled();
         consumeChoice();
         applySelections(current);
+    }
+
+    /**
+     * 清理换了路径、且这次勾选了更新的旧自选模组。
+     *
+     * 自动弹窗和下载并行，planRemovals 执行时玩家还没确认；旧路径不能在那时删，
+     * 否则玩家取消勾选后旧版本已经没了。这里等 applyOptionalChoices 收尾后再删。
+     *
+     * - `old`: 旧清单
+     * - `current`: 新清单
+     */
+    private void cleanupReplacedOptionals(Manifest old, Manifest current) throws IOException {
+        if (old == null || options.noDelete || !rulesAvailable) {
+            return;
+        }
+        Map<String, Manifest.FileEntry> byIdentity = new HashMap<>();
+        Set<String> live = new java.util.HashSet<>();
+        for (Manifest.FileEntry item : current.files) {
+            byIdentity.put(item.identity(), item);
+            live.add(Fs.pathKey(item.path));
+        }
+        List<String> archiveDirs = new ArrayList<>();
+        for (Manifest.ArchiveEntry item : current.archives) {
+            String dir = Fs.pathKey(item.dir);
+            if (!dir.isEmpty()) {
+                archiveDirs.add(dir);
+            }
+        }
+        String selfKey = Fs.pathKey(selfJarRelative());
+        for (Manifest.FileEntry item : old.files) {
+            Manifest.FileEntry replacement = byIdentity.get(item.identity());
+            if (replacement == null || !replacement.optional
+                    || replacement.path.equals(item.path)
+                    || !Boolean.TRUE.equals(selections.get(replacement.path))
+                    || rules.isIgnored(replacement.path)) {
+                continue;
+            }
+            String key = Fs.pathKey(item.path);
+            if (key.isEmpty() || live.contains(key) || key.equals(selfKey)
+                    || rules.isIgnored(item.path) || insideArchive(key, archiveDirs)) {
+                continue;
+            }
+            Path target = safeRemovalTarget(item.path);
+            if (target == null || existingVariant(target) == null) {
+                continue;
+            }
+            deleteWithDisabled(target);
+            info(Text.of(Msg.REMOVING_OLD_FILE_PATH, item.path));
+        }
     }
 
     /**
@@ -345,62 +395,64 @@ final class Sync {
         return changed;
     }
 
-    /** 按勾选把文件归位，并把启用 / 禁用条数写进日志 */
-    private void applySelections(Manifest current) throws IOException {
+    /**
+     * 记录本次勾选结果并写日志：勾选 = 这次下载/更新，未勾 = 这次跳过。
+     * 文件启用/禁用由本地原有的文件名决定，这里不改名。
+     */
+    private void applySelections(Manifest current) {
         ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
-        reconcileOptionalFiles(current);
-        int enabled = 0;
-        int disabled = 0;
+        int updated = 0;
+        int skipped = 0;
         for (Manifest.FileEntry item : current.files) {
             if (!item.optional) {
                 continue;
             }
             if (Boolean.TRUE.equals(selections.get(item.path))) {
-                enabled++;
+                updated++;
             } else {
-                disabled++;
+                skipped++;
             }
         }
-        info(Text.of(Msg.OPTIONAL_APPLY_COUNT, enabled, disabled));
+        info(Text.of(Msg.OPTIONAL_APPLY_COUNT, updated, skipped));
+        for (Manifest.FileEntry item : current.files) {
+            if (!item.optional) {
+                continue;
+            }
+            info("  - " + (Boolean.TRUE.equals(selections.get(item.path))
+                    ? Text.of(Msg.MARK_ENABLE) : Text.of(Msg.MARK_DISABLE)) + item.path);
+        }
     }
 
     /**
-     * 按勾选把自选模组文件归位：勾选 = 清单路径（启用），未勾选 = 加 .disabled（禁用）。
-     * 内容在下载阶段已就位，这里通常只是改名；另一侧变体清掉，避免同名双份。
+     * 清单指纹命中、只改了勾选时，把这次新勾上但本地缺失 / 内容过期的自选模组补下。
+     *
+     * 指纹没变说明清单和上次一样，走不到下载阶段；但玩家可以在「每次启动」的弹窗里
+     * 勾上上次跳过的模组，这时必须把文件取回来，否则选择只写进了状态文件。
+     *
+     * - `current`: 当前清单（本地副本，URL 已解析）
      */
-    private void reconcileOptionalFiles(Manifest current) throws IOException {
+    private void downloadSelectedOptionals(Manifest current) throws IOException {
+        List<DownloadTask> tasks = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
-            if (!item.optional || rules.isIgnored(item.path)) {
+            if (!item.optional || rules.isIgnored(item.path)
+                    || !Boolean.TRUE.equals(selections.get(item.path))) {
                 continue;
             }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
-            boolean selected = Boolean.TRUE.equals(selections.get(item.path));
-            Path desired = selected ? target : withSuffix(target, DISABLED_SUFFIX);
             Path existing = existingVariant(target);
-            if (existing == null) {
+            if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
                 continue;
             }
-            if (!existing.equals(desired)) {
-                moveReplace(existing, desired);
-                info(Text.of(Msg.OPTIONAL_RENAMED, existing.getFileName().toString(),
-                        desired.getFileName().toString()));
-            }
-            // 旁文件不可用时只改名不删旧副本：无法确认被保护的范围
-            if (!options.noDelete && rulesAvailable) {
-                Path stale = selected ? withSuffix(target, DISABLED_SUFFIX) : target;
-                if (!stale.equals(desired) && !stale.equals(existing)) {
-                    Files.deleteIfExists(stale);
-                }
-            }
+            // 有旧文件就沿用原名，别把玩家停用中的模组改回启用
+            tasks.add(new DownloadTask(null, existing == null ? target : existing,
+                    item.sha1, item.sha256, item));
         }
-    }
-
-    private static void moveReplace(Path from, Path to) throws IOException {
-        try {
-            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
-            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+        if (tasks.isEmpty()) {
+            return;
         }
+        ui.total(tasks.size());
+        ui.stage(Text.of(Msg.DOWNLOADING_FILES));
+        downloadAll(tasks, tasks.size());
     }
 
     /** 按钮回调：弹管理窗；已有弹窗开着、还没解析到清单或 dry-run 时忽略 */
@@ -545,13 +597,12 @@ final class Sync {
     }
 
     /**
-     * 没有文件要更新时弹窗，选完当场按勾选归位
+     * 没有文件要更新时弹窗，选完只补下这次新勾上的可选文件
      *
-     * 这条路径不下载任何文件，归位只是改文件名；选择与标记写完就生效，
-     * 不必等下一次真正的同步。归位本身出错只记日志：这条路径一个文件都没下载过，
-     * 不该因为改名失败拦住启动，下次启动会照原样重试。
+     * 这条路径通常不下载文件；只有玩家在「每次启动」的弹窗里勾上上次跳过的模组时，
+     * 才把那个文件补回来。选择与标记写完就生效，失败只记日志，不拦住启动。
      *
-     * @param current      清单，用于组装行与归位
+     * @param current      清单，用于组装行与补下新勾选的文件
      * @param changedCount 新增或内容变化的可选条目数
      * @param manifestUrl  清单地址，用于取发布端写的简介
      *
@@ -580,6 +631,7 @@ final class Sync {
             return null;
         }
         try {
+            downloadSelectedOptionals(current);
             applySelections(current);
             OptionalState.save(options.stateDir, OptionalState.entries(selections, hashesOf(current)));
         } catch (IOException e) {
@@ -763,15 +815,6 @@ final class Sync {
         return null;
     }
 
-    private boolean sameVersion(Manifest old, Manifest current) {
-        if (old == null) {
-            return false;
-        }
-        String a = old.packVersion.trim();
-        String b = current.packVersion.trim();
-        return !b.isEmpty() && a.equals(b);
-    }
-
     /**
      * 取清单同目录下的同步规则旁文件。
      *
@@ -789,6 +832,13 @@ final class Sync {
             info(Text.of(Msg.SYNC_RULES_LOADED, loaded.removed.size(), loaded.ignoreCount()));
             return loaded;
         } catch (IOException | RuntimeException e) {
+            // 404 = 发布端没有放旁文件，按空规则处理，保留 MML 原生的旧清单删除行为。
+            // 只有网络故障、返回网页、JSON 坏这类「无法确认」的情况才停掉删除。
+            if (isMissingSidecar(e)) {
+                rulesAvailable = true;
+                info(Text.of(Msg.SYNC_RULES_NOT_FOUND));
+                return SyncRules.empty();
+            }
             rulesAvailable = false;
             String reason = e.getMessage() == null || e.getMessage().trim().isEmpty()
                     ? e.getClass().getSimpleName() : e.getMessage();
@@ -796,6 +846,20 @@ final class Sync {
             info(Text.of(Msg.SIDECAR_UNAVAILABLE_NO_DELETE));
             return SyncRules.empty();
         }
+    }
+
+    /** 旁文件不存在：HTTP 404 或本地文件缺失，按空规则处理；其余错误仍按不可用处理 */
+    private static boolean isMissingSidecar(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.io.FileNotFoundException) {
+                return true;
+            }
+            String message = cause.getMessage();
+            if (message != null && message.startsWith("HTTP 404")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void validate(Manifest manifest) throws IOException {
@@ -861,9 +925,9 @@ final class Sync {
                 continue;
             }
             Path target = safeRemovalTarget(path);
-            // 只处理清单里那个名字：玩家停用的 .disabled 副本不在删除范围内，
-            // 因此只有该名字存在时才排进计划；删除列表可以长期挂在发布端。
-            if (target == null || !Files.isRegularFile(target) || !queued.add(key)) {
+            // 清单里那个名字或它的停用副本存在就排进计划；删除时两者一起清掉，
+            // 与 MML 原生删除语义一致。删除列表可以长期挂在发布端。
+            if (target == null || existingVariant(target) == null || !queued.add(key)) {
                 continue;
             }
             retiredPaths.add(path);
@@ -888,9 +952,22 @@ final class Sync {
         for (Manifest.FileEntry item : current.files) {
             byIdentity.put(item.identity(), item);
         }
+        // 自选模组的旧路径留到弹窗确认后再清：自动弹窗是异步的，
+        // 这里执行时玩家可能还没勾选/取消。
+        Set<String> deferredOptional = new java.util.HashSet<>();
+        for (Manifest.FileEntry item : current.files) {
+            if (item.optional) {
+                deferredOptional.add(item.identity());
+            }
+        }
         int protectedCount = 0;
         int archiveProtected = 0;
+        int deferredCount = 0;
         for (Manifest.FileEntry item : old.files) {
+            if (deferredOptional.contains(item.identity())) {
+                deferredCount++;
+                continue;
+            }
             Manifest.FileEntry replacement = byIdentity.get(item.identity());
             if (replacement != null && replacement.path.equals(item.path)) {
                 continue;
@@ -910,6 +987,9 @@ final class Sync {
             if (queued.add(key)) {
                 files.add(item.path);
             }
+        }
+        if (deferredCount > 0) {
+            info(Text.of(Msg.DEFERRED_OPTIONAL_REMOVAL, deferredCount));
         }
         if (protectedCount > 0) {
             info(Text.of(Msg.IGNORE_SKIPPED_REMOVAL, protectedCount));
@@ -998,15 +1078,11 @@ final class Sync {
                 info(Text.of(Msg.SYNC_RULES_BAD_PATH, path));
                 continue;
             }
-            Fs.deleteFile(target);
+            // 与 MML 的 delete_with_disabled 一致：原名和 .disabled / .disable 副本一起删
+            deleteWithDisabled(target);
             Msg reason = retiredPaths.contains(path)
                     ? Msg.REMOVING_RETIRED_FILE : Msg.REMOVING_OLD_FILE_PATH;
             info(Text.of(reason, path));
-            // 玩家停用的副本不动：保留文件，重新启用时不必重新下载
-            if (Files.isRegularFile(withSuffix(target, DISABLED_SUFFIX))
-                    || Files.isRegularFile(withSuffix(target, LEGACY_DISABLE_SUFFIX))) {
-                info(Text.of(Msg.RETIRED_KEPT_DISABLED, path));
-            }
         }
         for (String dir : dirs) {
             Path target = Fs.resolveSafe(options.gameDir, dir);
@@ -1021,7 +1097,7 @@ final class Sync {
      * 算出要下载的文件与各自落盘位置。
      *
      * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
-     * 自选模组的内容始终同步，勾选与否只决定装成启用名还是 .disabled。
+     * 自选模组只有勾选了才下载，没勾就跳过，本地旧文件原样保留。
      *
      * - `current`: 远程清单
      * - `selfJar`: 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
@@ -1042,12 +1118,19 @@ final class Sync {
             }
             Path target = Fs.resolveSafe(options.gameDir, item.path);
             Path existing = existingVariant(target);
-            if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
+            if (item.optional) {
+                // 勾选 = 这次下载/更新；没勾 = 不下载，本地旧文件（启用或禁用）原样留着
+                if (!Boolean.TRUE.equals(selections.get(item.path))) {
+                    continue;
+                }
+                if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
+                    continue;
+                }
+                // 已有文件沿用原名：玩家手动停用的 .disabled 不因为一次更新被悄悄改回启用
+                out.add(new PlannedFile(item, existing == null ? target : existing));
                 continue;
             }
-            if (item.optional) {
-                boolean selected = Boolean.TRUE.equals(selections.get(item.path));
-                out.add(new PlannedFile(item, selected ? target : withSuffix(target, DISABLED_SUFFIX)));
+            if (existing != null && Downloader.matches(existing, item.sha1, item.sha256)) {
                 continue;
             }
             out.add(new PlannedFile(item, target));
@@ -1086,6 +1169,18 @@ final class Sync {
     /** 给文件名追加后缀，如 `mods/a.jar` → `mods/a.jar.disabled` */
     private static Path withSuffix(Path target, String suffix) {
         return target.resolveSibling(target.getFileName().toString() + suffix);
+    }
+
+    /**
+     * 删除文件及它的停用副本；与 MML 的 `delete_with_disabled` 一致。
+     *
+     * 旧清单移除某条目后，原名和 `.disabled` / `.disable` 都应该一起消失，
+     * 否则同一个模组会留下一份玩家不会加载的旧版本。
+     */
+    private static void deleteWithDisabled(Path target) throws IOException {
+        Fs.deleteFile(target);
+        Files.deleteIfExists(withSuffix(target, DISABLED_SUFFIX));
+        Files.deleteIfExists(withSuffix(target, LEGACY_DISABLE_SUFFIX));
     }
 
     /** 条目的内容哈希：SHA1 优先，没有时用 SHA256 */
@@ -1171,7 +1266,7 @@ final class Sync {
         }
     }
 
-    /** --dry-run 时把自选模组的启用 / 禁用计划打出来 */
+    /** --dry-run 时把自选模组的更新 / 跳过计划打出来 */
     private void printOptionalPlan(Manifest current) {
         int enabled = 0;
         int disabled = 0;

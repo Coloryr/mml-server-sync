@@ -14,9 +14,8 @@ import java.util.Map;
 /**
  * 自选模组的状态，落在状态目录下的两个文件里。
  *
- * `optional-state.txt` 一行一条 TSV：内容哈希、清单路径、上次是否勾选（1/0），
- * 负责记住玩家上一次的勾选、判断新增与内容变化，以及按勾选决定自选模组装成启用
- * （.jar）还是禁用（.jar.disabled）。`optional-prompt.txt` 只有一行 `suppress=1`，
+ * `optional-state.txt` 一行一条 TSV：内容哈希、清单路径、上次是否选择更新（1/0），
+ * 负责记住玩家上一次的勾选、判断新增与内容变化。`optional-prompt.txt` 只有一行 `suppress=1`，
  * 表示玩家勾过「以后不再显示」，此后只在有新增或内容变化时弹窗。
  *
  * 两个文件分开：标记行混进三列 TSV 会让逐行解析多出一条不成形的记录。
@@ -39,7 +38,7 @@ final class OptionalState {
         final String sha1;
         /** 清单里的相对路径，`/` 分隔 */
         final String file;
-        /** 上次是否勾选 */
+        /** 上次是否选择更新 */
         final boolean selected;
 
         Entry(String sha1, String file, boolean selected) {
@@ -73,10 +72,11 @@ final class OptionalState {
         }
 
         /**
-         * 同一族（`[分类]` 标签相同）上一次的勾选状态。
+         * 同一族（`[分类]` 标签相同）上一次的选择（更新 / 跳过）。
          *
          * 模组换版本后清单路径会变（`...歌]X-1.0.jar` → `...歌]X-1.1.jar`），
-         * 新路径本身没有记录；此时沿用同族旧路径的选择，玩家的「停用」才不会被悄悄改成启用。
+         * 新路径本身没有记录；此时沿用同族旧路径的选择，玩家上次跳过的模组
+         * 不会在换名后突然被下载。
          *
          * - `path`: 清单里的相对路径
          *
@@ -132,7 +132,7 @@ final class OptionalState {
     /**
      * 读状态目录里的选择状态
      *
-     * 旧版 skipped.txt（只记「跳过」）存在时迁移：其中的路径按未勾选接入，
+     * 旧版 skipped.txt（只记「跳过」）存在时迁移：其中的路径按「这次跳过」接入，
      * 其余视为首次同步。迁移后删除旧文件。
      *
      * - `stateDir`: 状态目录
@@ -177,6 +177,7 @@ final class OptionalState {
         }
         try {
             boolean any = false;
+            // 旧 skipped.txt 的路径按「跳过本次更新」迁入
             for (String line : Files.readAllLines(legacy, StandardCharsets.UTF_8)) {
                 String[] parts = line.split("\t", -1);
                 if (parts.length < 2 || parts[1].trim().isEmpty()) {
