@@ -71,6 +71,62 @@ final class OptionalState {
             Entry entry = byPath.get(path);
             return entry == null ? "" : entry.sha1;
         }
+
+        /**
+         * 同一族（`[分类]` 标签相同）上一次的勾选状态。
+         *
+         * 模组换版本后清单路径会变（`...歌]X-1.0.jar` → `...歌]X-1.1.jar`），
+         * 新路径本身没有记录；此时沿用同族旧路径的选择，玩家的「停用」才不会被悄悄改成启用。
+         *
+         * - `path`: 清单里的相对路径
+         *
+         * # 返回值
+         *
+         * 同族的上次选择；没有同族记录或有冲突时返回 null（按新增条目处理）
+         */
+        Boolean inherited(String path) {
+            String family = familyOf(path);
+            if (family.isEmpty()) {
+                return null;
+            }
+            Boolean found = null;
+            for (Map.Entry<String, Entry> item : byPath.entrySet()) {
+                if (!family.equals(familyOf(item.getKey()))) {
+                    continue;
+                }
+                boolean value = item.getValue().selected;
+                if (found != null && found != value) {
+                    return null;
+                }
+                found = value;
+            }
+            return found;
+        }
+
+        /**
+         * 同族标识：目录 + 文件名开头连续的 `[标签]` 组（至少两组）。
+         *
+         * 本包的自选模组统一带 `[C][自选][点歌]` 这类标签，标签之后才是文件名与版本号；
+         * 只取开头连续的方括号组，文件名末尾的 `[1.3.5]` 这类版本标签不会被算进族，
+         * 否则版本一变就认不出是同一个模组。
+         */
+        static String familyOf(String path) {
+            String value = path == null ? "" : path.replace('\\', '/').trim();
+            int slash = value.lastIndexOf('/');
+            String dir = slash < 0 ? "" : value.substring(0, slash + 1);
+            String name = slash < 0 ? value : value.substring(slash + 1);
+            int index = 0;
+            int groups = 0;
+            while (index < name.length() && name.charAt(index) == '[') {
+                int close = name.indexOf(']', index);
+                if (close < 0) {
+                    break;
+                }
+                index = close + 1;
+                groups++;
+            }
+            return groups < 2 ? "" : dir + name.substring(0, index);
+        }
     }
 
     /**

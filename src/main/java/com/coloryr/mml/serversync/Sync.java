@@ -472,6 +472,10 @@ final class Sync {
                 continue;
             }
             Boolean recorded = state.selected(item.path);
+            if (recorded == null) {
+                // 换版本的同一模组路径变了：沿用同族上一次的选择，别把玩家的停用改成启用
+                recorded = state.inherited(item.path);
+            }
             boolean selected;
             if (options.skip.contains(item.path)) {
                 selected = false;
