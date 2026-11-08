@@ -755,15 +755,9 @@ final class Sync {
                 files.add(item.path);
             }
         }
-        Set<String> currentArchives = new java.util.HashSet<>();
-        for (Manifest.ArchiveEntry item : current.archives) {
-            currentArchives.add(item.file);
-        }
-        for (Manifest.ArchiveEntry item : old.archives) {
-            if (!currentArchives.contains(item.file) && item.deleteOld && !item.dir.isEmpty()) {
-                dirs.add(item.dir);
-            }
-        }
+        // 从清单里移除压缩包条目**不再删除**已解压目录：条目消失无法表达「要删」的意图，
+        // 而且会把玩家改过的 config 一起删掉。需要清理时保留/新增 Over=true 的包，
+        // 覆盖解压时会先删旧目录；不再提供「删条目 = 删目录」。
         dirs.sort(Comparator.comparingInt((String dir) -> -depth(dir)));
     }
 
