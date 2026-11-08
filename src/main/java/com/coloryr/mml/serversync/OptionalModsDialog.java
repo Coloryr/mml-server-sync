@@ -13,10 +13,8 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -41,6 +39,10 @@ import javax.swing.table.TableColumnModel;
  * 用表格而不是一列复选框：条目多时要有表头与滚动条，名称 / 介绍 / 状态各占一列才对得齐。
  * 点整行任意位置都能翻勾选状态，空格也可以。关窗、Esc 与「确定」同义：
  * 返回当前勾选结果，没有取消的概念——不改动就按打开时的勾选继续。
+ *
+ * 底部另有「记住我的选择，以后不再显示」：勾上并确认后由调用方写标记文件，
+ * 之后只在自选模组有新增或内容变化时才自动弹窗。初始状态由调用方给出——自动弹窗
+ * 在玩家尚未记住时不替他做决定，管理窗则反映当前是否已记住。
  *
  * 只在交互模式下弹：--no-gui、headless 与给了 --skip 的脚本自动弹的这扇窗不出现。
  */
@@ -82,6 +84,19 @@ final class OptionalModsDialog {
         }
     }
 
+    /** 弹窗结果：玩家确认的勾选，外加「以后不再显示」 */
+    static final class Result {
+        /** 路径 → 是否勾选，覆盖全部展示行 */
+        final LinkedHashMap<String, Boolean> selections;
+        /** 玩家勾了「记住我的选择，以后不再显示」 */
+        final boolean suppressPrompt;
+
+        Result(LinkedHashMap<String, Boolean> selections, boolean suppressPrompt) {
+            this.selections = selections;
+            this.suppressPrompt = suppressPrompt;
+        }
+    }
+
     /**
      * 弹出勾选窗并等待玩家确认；必须在事件线程上调用
      *
@@ -92,33 +107,40 @@ final class OptionalModsDialog {
      * - `parent`: 父窗口，可为 null
      * - `rows`: 要列出的条目
      * - `header`: 表格上方的说明文字
+     * - `rememberChecked`: 「以后不再显示」的初始勾选状态，由调用方按当前是否已记住给出
      *
      * # 返回值
      *
-     * 路径 → 是否勾选，覆盖全部展示行
+     * 全部展示行的勾选状态与「以后不再显示」的勾选状态
      */
-    static java.util.LinkedHashMap<String, Boolean> askForSelection(Component parent,
-                                                                    List<Row> rows, String header) {
+    static Result askForSelection(Component parent, List<Row> rows, String header,
+                                  boolean rememberChecked) {
         if (SwingUtilities.isEventDispatchThread()) {
-            return show(parent, rows, header);
+            return show(parent, rows, header, rememberChecked);
         }
-        final java.util.LinkedHashMap<String, Boolean>[] result = new java.util.LinkedHashMap[1];
+        final Result[] result = new Result[1];
         try {
-            SwingUtilities.invokeAndWait(() -> result[0] = show(parent, rows, header));
+            SwingUtilities.invokeAndWait(
+                    () -> result[0] = show(parent, rows, header, rememberChecked));
         } catch (Exception e) {
-            // 弹不出来别拦住同步：按打开时的勾选处理
+            // 弹不出来别拦住同步：按打开时的勾选处理，「不再显示」的勾选状态原样保留
             Log.error(Text.of(Msg.FAILED_TO_OPEN_THE_OPTIONAL_MOD_DIALOG) + e.getMessage());
-            java.util.LinkedHashMap<String, Boolean> fallback = new java.util.LinkedHashMap<>();
-            for (Row row : rows) {
-                fallback.put(row.path, row.checked);
-            }
-            return fallback;
+            return fallbackResult(rows, rememberChecked);
         }
         return result[0];
     }
 
-    private static java.util.LinkedHashMap<String, Boolean> show(Component parent, List<Row> rows,
-                                                                 String header) {
+    /** 弹窗打不开时的结果：每行都按初始勾选，标记状态不变 */
+    private static Result fallbackResult(List<Row> rows, boolean rememberChecked) {
+        LinkedHashMap<String, Boolean> selections = new LinkedHashMap<>();
+        for (Row row : rows) {
+            selections.put(row.path, row.checked);
+        }
+        return new Result(selections, rememberChecked);
+    }
+
+    private static Result show(Component parent, List<Row> rows, String header,
+                               boolean rememberChecked) {
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MODS_BUTTON), true);
         dialog.setMinimumSize(new Dimension(720, 380));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -196,6 +218,8 @@ final class OptionalModsDialog {
 
         final JCheckBox all = new JCheckBox(Text.of(Msg.SELECT_ALL), true);
         final JLabel count = new JLabel();
+        // 勾上只表示「以后不要自动弹」，不影响这次的勾选内容
+        final JCheckBox never = new JCheckBox(Text.of(Msg.NEVER_SHOW_AGAIN), rememberChecked);
         // 按钮文字固定：带已选数量的文字会随勾选变化，按钮宽度与位置跟着左右跳
         final JButton ok = new JButton(Text.of(Msg.CONFIRM_SELECTION));
 
@@ -243,6 +267,7 @@ final class OptionalModsDialog {
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         left.add(count);
         left.add(all);
+        left.add(never);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.add(ok);
         JPanel footer = new JPanel(new BorderLayout());
@@ -261,11 +286,11 @@ final class OptionalModsDialog {
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
 
-        java.util.LinkedHashMap<String, Boolean> out = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Boolean> out = new LinkedHashMap<>();
         for (int i = 0; i < rows.size(); i++) {
             out.put(rows.get(i).path, Boolean.TRUE.equals(model.getValueAt(i, 0)));
         }
-        return out;
+        return new Result(out, never.isSelected());
     }
 
     private static void toggle(DefaultTableModel model, int row) {

@@ -6,20 +6,28 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 自选模组的选择状态，落在状态目录下的 optional-state.txt。
+ * 自选模组的状态，落在状态目录下的两个文件里。
  *
- * 一行一条 TSV：内容哈希、清单路径、上次是否勾选（1/0）。服务三件事——
- * 首次同步（文件不存在）与内容变化时重新弹窗、记住玩家上一次的勾选、
- * 以及按勾选决定自选模组装成启用（.jar）还是禁用（.jar.disabled）。
+ * `optional-state.txt` 一行一条 TSV：内容哈希、清单路径、上次是否勾选（1/0），
+ * 负责记住玩家上一次的勾选、判断新增与内容变化，以及按勾选决定自选模组装成启用
+ * （.jar）还是禁用（.jar.disabled）。`optional-prompt.txt` 只有一行 `suppress=1`，
+ * 表示玩家勾过「以后不再显示」，此后只在有新增或内容变化时弹窗。
+ *
+ * 两个文件分开：标记行混进三列 TSV 会让逐行解析多出一条不成形的记录。
  */
 final class OptionalState {
     /** 状态文件名，放在状态目录下 */
     static final String FILE_NAME = "optional-state.txt";
+    /** 「以后不再显示」标记文件名 */
+    static final String PROMPT_FILE_NAME = "optional-prompt.txt";
+    /** 标记文件里表示已记住的那一行 */
+    private static final String PROMPT_SUPPRESSED_LINE = "suppress=1";
     /** 旧版跳过记录文件名；存在时迁移成「未勾选」后删除 */
     static final String LEGACY_FILE_NAME = "skipped.txt";
 
@@ -167,5 +175,52 @@ final class OptionalState {
             out.add(new Entry(hashes.getOrDefault(item.getKey(), ""), item.getKey(), item.getValue()));
         }
         return out;
+    }
+
+    /**
+     * 玩家是否勾过「记住我的选择，以后不再显示」
+     *
+     * 标记文件缺失、读不出来或内容不是 `suppress=1` 时都按未记住处理：宁可多弹一次，
+     * 也不要让一个坏文件把入口彻底藏起来。
+     *
+     * - `stateDir`: 状态目录
+     *
+     * # 返回值
+     *
+     * 已记住时返回 true
+     */
+    static boolean promptSuppressed(Path stateDir) {
+        Path file = stateDir.resolve(PROMPT_FILE_NAME);
+        if (!Files.isRegularFile(file)) {
+            return false;
+        }
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                if (PROMPT_SUPPRESSED_LINE.equals(line.trim())) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            Log.error(Text.of(Msg.FAILED_TO_READ_THE_OPTIONAL_PROMPT_STATE) + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * 记住 / 取消记住「以后不再显示」
+     *
+     * 取消记住就是把标记文件删掉，不留 `suppress=0` 这种同样要解析的中间状态。
+     *
+     * - `stateDir`: 状态目录
+     * - `suppressed`: 是否记住
+     */
+    static void savePromptSuppressed(Path stateDir, boolean suppressed) throws IOException {
+        Path file = stateDir.resolve(PROMPT_FILE_NAME);
+        if (!suppressed) {
+            Files.deleteIfExists(file);
+            return;
+        }
+        Files.createDirectories(stateDir);
+        Files.write(file, Collections.singletonList(PROMPT_SUPPRESSED_LINE), StandardCharsets.UTF_8);
     }
 }
