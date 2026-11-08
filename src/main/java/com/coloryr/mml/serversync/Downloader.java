@@ -24,6 +24,8 @@ import java.util.zip.ZipException;
 final class Downloader {
     /** 字节进度两条日志的最小间隔，单位纳秒 */
     private static final long REPORT_INTERVAL = 1_000_000_000L;
+    /** 单个文件最多尝试次数：Connection reset 这类瞬时错误重试往往就好 */
+    private static final int DOWNLOAD_ATTEMPTS = 3;
 
     private final String apiKey;
     private final boolean quiet;
@@ -125,7 +127,12 @@ final class Downloader {
         return "";
     }
 
-    /** 下载并校验；本地文件已匹配时直接跳过。返回是否真的下载了。 */
+    /**
+     * 下载并校验；本地文件已匹配时直接跳过。返回是否真的下载了。
+     *
+     * 连接被重置、读超时这类瞬时错误会重试（最多 {@link #DOWNLOAD_ATTEMPTS} 次）；
+     * 哈希不匹配说明内容不对，重试没有意义，直接失败。
+     */
     boolean download(String url, Path target, String sha1, String sha256) throws IOException {
         if (url == null || url.trim().isEmpty()) {
             throw new IOException(Text.of(Msg.DOWNLOAD_URL_IS_EMPTY) + target);
@@ -138,6 +145,31 @@ final class Downloader {
         }
         Files.createDirectories(target.toAbsolutePath().normalize().getParent());
         Path temp = target.resolveSibling(target.getFileName() + ".part");
+        IOException last = null;
+        for (int attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+            try {
+                return downloadOnce(url, target, temp, sha1, sha256);
+            } catch (VerifyException e) {
+                // 文件下完了但哈希不对：换一次连接也可能还是坏内容，不重试
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                Files.deleteIfExists(temp);
+                if (attempt < DOWNLOAD_ATTEMPTS) {
+                    if (!quiet) {
+                        Log.info(Text.of(Msg.DOWNLOAD_RETRY, attempt, target.getFileName(),
+                                describe(e)));
+                    }
+                    sleep(400L * attempt);
+                }
+            }
+        }
+        throw last == null ? new IOException(Text.of(Msg.DOWNLOAD_FAILED)) : last;
+    }
+
+    /** 下载一次；失败时由调用方决定是否重试 */
+    private boolean downloadOnce(String url, Path target, Path temp, String sha1, String sha256)
+            throws IOException {
         Files.deleteIfExists(temp);
         MessageDigest sha1Digest = digest("SHA-1");
         MessageDigest sha256Digest = digest("SHA-256");
@@ -172,10 +204,10 @@ final class Downloader {
                 }
             }
             if (!sha1.isEmpty() && !hex(sha1Digest.digest()).equalsIgnoreCase(sha1)) {
-                throw new IOException(Text.of(Msg.SHA1_MISMATCH) + target);
+                throw new VerifyException(Text.of(Msg.SHA1_MISMATCH) + target);
             }
             if (!sha256.isEmpty() && !hex(sha256Digest.digest()).equalsIgnoreCase(sha256)) {
-                throw new IOException(Text.of(Msg.SHA256_MISMATCH) + target);
+                throw new VerifyException(Text.of(Msg.SHA256_MISMATCH) + target);
             }
             try {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -472,5 +504,27 @@ final class Downloader {
         } catch (java.io.UnsupportedEncodingException e) {
             return value;
         }
+    }
+    /** 内容哈希不匹配：重试没有意义 */
+    private static final class VerifyException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        VerifyException(String message) {
+            super(message);
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static String describe(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.trim().isEmpty()
+                ? error.getClass().getSimpleName() : message;
     }
 }

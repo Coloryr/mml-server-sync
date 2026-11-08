@@ -156,6 +156,7 @@ enum Msg {
     UPDATE_2("- 更新 ", "- update "),
     UNNAMED("(未命名)", "(unnamed)"),
     DOWNLOAD_FAILED("下载失败", "download failed"),
+    DOWNLOAD_RETRY("下载中断，第 %s 次重试 %s：%s", "Download interrupted, retry %s for %s: %s"),
     DOWNLOAD_INTERRUPTED("下载被中断", "download interrupted"),
     UPDATE_CHECK_FAILED_IGNORING("检查更新失败，忽略: ", "Update check failed, ignoring: "),
     NOT_RUNNING_FROM_A_JAR_SKIPPING_SELF_UPDATE("不是以 jar 方式运行，跳过自更新", "Not running from a jar, skipping self-update"),

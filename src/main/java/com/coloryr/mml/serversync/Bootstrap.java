@@ -130,7 +130,15 @@ final class Bootstrap {
      * 退出码；返回 null 表示这个包装不上，调用方回退到当前版本
      */
     private static Integer runFromJar(Path jar, String[] args, Progress progress) {
-        try (UpdateClassLoader loader = new UpdateClassLoader(jar.toUri().toURL())) {
+        UpdateClassLoader loader;
+        try {
+            loader = new UpdateClassLoader(jar.toUri().toURL());
+        } catch (java.net.MalformedURLException e) {
+            return null;
+        }
+        // 故意不关闭：同步失败时 EDT 上可能还开着自选模组弹窗，它收尾时还要用这个加载器。
+        // 关闭后晚加载的类会抛 NoClassDefFoundError（见 OptionalModsDialog.Result）。
+        try {
             Class<?> entry = Class.forName(ENTRY, true, loader);
             Method method = entry.getMethod("run", String[].class, Progress.class);
             Log.info(Text.of(Msg.USING_UPDATE_PACKAGE_VERSION, jar.getFileName(), Main.VERSION));

@@ -62,6 +62,7 @@ MML 的 `server_instance_ids.json`、`server.json`、`game.json`、`icon.png` �
 ```text
 last-manifest.json    上次同步的清单原文（指纹比对、旧清单读取）
 optional-state.txt    自选模组的选择记录
+optional-prompt.txt   自选模组「每次启动弹窗」开关（suppress=1）
 mml-server-sync.log   同步日志
 tmp/                  配置包 / 基础包的下载中转
 ```

@@ -115,6 +115,9 @@ final class OptionalModsDialog {
      */
     static Result askForSelection(Component parent, List<Row> rows, String header,
                                   boolean rememberChecked) {
+        // 提前解析 Result：更新包的类加载器可能在同步失败后被宿主关闭，
+        // 弹窗收尾（或回退）时才加载会 NoClassDefFoundError
+        Result.class.getName();
         if (SwingUtilities.isEventDispatchThread()) {
             return show(parent, rows, header, rememberChecked);
         }
