@@ -87,6 +87,13 @@ final class Fs {
         });
     }
 
+    /** zip 里没有任何文件或目录条目；用于「空包 + Over=true = 删除目录」的显式删除 */
+    static boolean isEmptyZip(Path zip) throws IOException {
+        try (ZipFile file = new ZipFile(zip.toFile(), java.nio.charset.StandardCharsets.UTF_8)) {
+            return !file.entries().hasMoreElements();
+        }
+    }
+
     static void extractZip(Path zip, Path target, boolean base) throws IOException {
         if (!zip.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
             throw new IOException(Text.of(Msg.ONLY_ZIP_ARCHIVES_ARE_SUPPORTED) + zip);

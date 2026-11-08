@@ -233,12 +233,18 @@ final class Sync {
         for (ArchivePlan plan : downloaded) {
             checkCancelled();
             Path target = Fs.resolveSafe(options.gameDir, plan.item.dir);
-            if (plan.item.deleteOld) {
+            if (plan.item.deleteOld && Fs.isEmptyZip(plan.temp)) {
+                // 空包 + 覆盖 = 显式删除该目录（发布端用它替代「删条目」）
                 Fs.deleteDirectory(target);
+                info(Text.of(Msg.EMPTY_ARCHIVE_REMOVES_DIR, plan.item.dir));
+            } else {
+                if (plan.item.deleteOld) {
+                    Fs.deleteDirectory(target);
+                }
+                Fs.extractZip(plan.temp, target, false);
+                info(Text.of(Msg.EXTRACTING_CONFIG_TARGET, plan.item.dir));
             }
-            Fs.extractZip(plan.temp, target, false);
             Files.deleteIfExists(plan.temp);
-            info(Text.of(Msg.EXTRACTING_CONFIG_TARGET, plan.item.dir));
             ui.step(++done, plan.item.dir);
         }
 

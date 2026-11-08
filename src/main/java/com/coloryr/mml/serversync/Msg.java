@@ -194,6 +194,7 @@ enum Msg {
     NO_DELETE_SKIPPED("--no-delete：跳过 %s 个文件、%s 个目录的删除", "--no-delete: skipping %s file(s) and %s directory/directories"),
     BASE_EXTRACTED_TO("基础包已解压到 %s", "Base pack extracted to %s"),
     EXTRACTING_CONFIG_TARGET("解压配置: %s", "Extracting config: %s"),
+    EMPTY_ARCHIVE_REMOVES_DIR("空压缩包 + 覆盖：删除目录 %s", "Empty archive with Over: removing directory %s"),
     SYNC_COMPLETE_VERSION("更新完成，当前包版本 %s", "Update complete, pack version %s"),
     MANIFEST_SHA1_UNCHANGED("清单 SHA1 %s 未变，跳过整份下载", "Manifest SHA1 %s unchanged, skipping the full download"),
     CHANGED_OPTIONAL_COUNT("会变的可选模组 %s 个", "Changed optional mods: %s"),
