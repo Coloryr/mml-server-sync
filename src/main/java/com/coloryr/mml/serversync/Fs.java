@@ -59,6 +59,39 @@ final class Fs {
         return target;
     }
 
+    /**
+     * 路径比较用的规范键：统一分隔符、折叠大小写、去掉 `./` 与空段。
+     *
+     * 只用于比较，不用于落盘：返回的是小写键，在区分大小写的文件系统上不能直接解析。
+     * 绝对路径、盘符与含 `..` 的写法返回空串，由调用方按无效路径处理。
+     *
+     * # 返回值
+     *
+     * 规范键；路径无效或越界时返回空串
+     */
+    static String pathKey(String raw) {
+        String value = raw == null ? "" : raw.trim().replace('\\', '/');
+        if (value.isEmpty() || value.startsWith("/")
+                || (value.length() >= 2 && value.charAt(1) == ':'
+                && Character.isLetter(value.charAt(0)))) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(value.length());
+        for (String part : value.split("/")) {
+            if (part.isEmpty() || ".".equals(part)) {
+                continue;
+            }
+            if ("..".equals(part)) {
+                return "";
+            }
+            if (out.length() > 0) {
+                out.append('/');
+            }
+            out.append(part);
+        }
+        return out.toString().toLowerCase(Locale.ROOT);
+    }
+
     static void deleteFile(Path file) throws IOException {
         Files.deleteIfExists(file);
         Files.deleteIfExists(java.nio.file.Paths.get(file.toString() + ".disable"));

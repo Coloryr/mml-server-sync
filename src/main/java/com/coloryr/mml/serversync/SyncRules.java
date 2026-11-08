@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -16,12 +15,16 @@ import java.util.regex.Pattern;
  * 旁文件缺失或格式错误时按空规则处理，不改变原有同步行为。
  */
 final class SyncRules {
+    /** 禁用后缀：与 MMC / HMCL 一致 */
+    static final String DISABLED_SUFFIX = ".disabled";
+    /** 旧版禁用后缀，读取时仍认 */
+    static final String LEGACY_DISABLE_SUFFIX = ".disable";
+
     private static final SyncRules EMPTY = new SyncRules(
             Collections.<String>emptyList(), Collections.<String>emptyList());
 
     /** 历史废弃路径，只接受精确相对路径 */
     final List<String> removed;
-    private final List<String> ignoreRules;
 
     private final Set<String> exact = new HashSet<>();
     private final List<String> prefixes = new ArrayList<>();
@@ -29,14 +32,16 @@ final class SyncRules {
 
     private SyncRules(List<String> removed, List<String> ignoreRules) {
         this.removed = Collections.unmodifiableList(new ArrayList<>(removed));
-        this.ignoreRules = Collections.unmodifiableList(new ArrayList<>(ignoreRules));
         for (String rule : ignoreRules) {
-            String value = normalize(rule);
+            String raw = rule == null ? "" : rule.trim().replace('\\', '/');
+            // 结尾的 `/` 表示目录前缀，与发布端 path_matcher 一致
+            boolean directory = raw.endsWith("/");
+            String value = Fs.pathKey(raw);
             if (value.isEmpty()) {
                 continue;
             }
-            if (value.endsWith("/")) {
-                prefixes.add(value.substring(0, value.length() - 1));
+            if (directory) {
+                prefixes.add(value);
             } else if (value.indexOf('*') >= 0 || value.indexOf('?') >= 0) {
                 globs.add(Pattern.compile(toRegex(value)));
             } else {
@@ -59,8 +64,9 @@ final class SyncRules {
                 strings(root, "Ignore", "noOverwriteFiles"));
     }
 
+    /** 生效的规则条数；无效写法（越界、空规则）不计入 */
     int ignoreCount() {
-        return ignoreRules.size();
+        return exact.size() + prefixes.size() + globs.size();
     }
 
     /**
@@ -68,10 +74,18 @@ final class SyncRules {
      * 玩家手动停用的同名文件。
      */
     boolean isIgnored(String rawPath) {
-        String path = normalize(rawPath);
+        String path = Fs.pathKey(rawPath);
         if (path.isEmpty()) {
             return false;
         }
+        if (matches(path)) {
+            return true;
+        }
+        String variant = stripDisabledSuffix(path);
+        return !variant.equals(path) && matches(variant);
+    }
+
+    private boolean matches(String path) {
         if (exact.contains(path)) {
             return true;
         }
@@ -85,8 +99,7 @@ final class SyncRules {
                 return true;
             }
         }
-        String variant = stripDisabledSuffix(path);
-        return !variant.equals(path) && isIgnored(variant);
+        return false;
     }
 
     private static List<String> strings(Map<String, Object> root, String... keys) {
@@ -115,20 +128,9 @@ final class SyncRules {
         return item == null ? "" : Json.string(item, "path", "Path", "File", "file").trim();
     }
 
-    /** 统一分隔符、去掉前导路径标记并折叠大小写；Windows 文件名不区分大小写 */
-    private static String normalize(String raw) {
-        String value = raw == null ? "" : raw.trim().replace('\\', '/');
-        while (value.startsWith("./")) {
-            value = value.substring(2);
-        }
-        while (value.startsWith("/")) {
-            value = value.substring(1);
-        }
-        return value.toLowerCase(Locale.ROOT);
-    }
-
-    private static String stripDisabledSuffix(String path) {
-        for (String suffix : new String[]{".disabled", ".disable"}) {
+    /** 去掉禁用后缀；没有后缀时原样返回。入参必须是已规范化的路径键。 */
+    static String stripDisabledSuffix(String path) {
+        for (String suffix : new String[]{DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
             if (path.endsWith(suffix)) {
                 return path.substring(0, path.length() - suffix.length());
             }
@@ -136,7 +138,10 @@ final class SyncRules {
         return path;
     }
 
-    /** `*` 允许跨越目录，与发布端 fnmatch 语义一致 */
+    /**
+     * `*` 允许跨越目录，与发布端 `path_matcher` 一致：只有 `*` 与 `?` 是通配符，
+     * 方括号按字面处理（发布端也只在含 `*` / `?` 时才走通配分支）。
+     */
     private static String toRegex(String pattern) {
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < pattern.length(); i++) {
