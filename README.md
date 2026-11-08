@@ -5,28 +5,32 @@ MML 服务器实例（整合包）的独立更新器：读取 MML 生成的 `ser
 启动器使用，也支持 FCL / PojavLauncher 等安卓启动器；不兼容 HMCL
 `server-manifest.json` 或其他清单格式。
 
-当前版本 **1.7.0**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **1.8.0**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 与 MML 的关系
+
+- MML 的清单本体只有 `server.json`（发布时另生成 `server.json.sha1` 指纹）；
+  可选模组和配置同步方式都在这一份清单里。
+- MML 启动器自己启动游戏时，Agent 会识别并跳过同步，改用 MML 原生逻辑，不会双跑。
+- `server.json.sync.json` / `server.json.notes.json` 是**本更新器的扩展**，
+  MML 不生成也不读取；完整差异见 [docs/differences.md](docs/differences.md)。
 
 ## 特性
 
-- **增量更新**：先比 `server.json.sha1` 清单指纹，再按 SHA-1 / SHA-256 比对，
-  只下载缺失或内容变化的文件；指纹变了就按新清单同步。
+- **增量更新**：先比 `server.json.sha1` 指纹，再按 SHA-1 / SHA-256 比对，只下载缺失
+  或内容变化的文件；指纹变了就按新清单同步。
 - **两种入口**：Java Agent 直挂游戏 JVM，在 `main` 之前完成更新；也支持
   `java -jar` 命令行 / 启动器「启动前脚本」。
-- **自选模组**：`Optional` 条目勾选才下载/更新，不勾选本次跳过、旧文件保留；
-  默认每次启动都能改选，勾「记住我的选择」后只在新增 / 内容变化时弹；支持
-  `--skip` / `--skip-file`。
-- **同步规则（更新器扩展）**：更新器可读 `server.json.sync.json` 的 `Removed` / `Ignore`
-  清理历史废弃文件、保护玩家私有文件；MML 只生成 `server.json`（和 `.sha1`），
-  不会生成或读取这个旁文件。
 - **配置目录四种同步方式**：压缩包整包 / 压缩包本目录 / 逐文件整目录 / 逐文件本目录，
-  按目录选一种；另有「不同步」「删除目录」。配置包与基础包自动解压，空 zip 可作
-  「墓碑包」删目录；从清单移除压缩包不会误删已解压目录。
+  按目录选一种；另有「不同步」「删除目录」。
+- **自选模组**：`Optional` 条目勾选才下载/更新，不勾选本次跳过、旧文件保留；
+  支持每次启动改选、记住选择、`--skip` / `--skip-file`。
+- **更新器扩展**：可用 `server.json.sync.json` 的 `Removed` / `Ignore`
+  清理历史废弃文件、保护玩家私有文件；可用 `server.json.notes.json` 显示模组简介。
 - **安全落盘**：单文件先写 `.part`，哈希校验通过后原子替换；下载中断不覆盖旧版本，
   瞬时错误自动重试。
-- **进度与取消**：Swing 进度窗显示阶段、进度与当前文件，可随时暂停、跳过本次更新或
-  结束游戏；更新失败时可选择重试 / 跳过 / 关闭游戏（Agent 在图形界面可用时默认开启，
-  命令行用 `--ask-on-failure`）。
+- **进度与取消**：Swing 进度窗显示阶段、进度与当前文件，可暂停、跳过本次更新或
+  结束游戏；失败时可选择重试 / 跳过 / 关闭游戏。
 - **自更新**：读取更新索引（默认 `https://www.coloryr.com/mml-server-sync/index.json`），
   新版本下载到 jar 同目录的 `update/`，下次启动由独立类加载器加载。
 - **界面**：中英双语按系统语言切换；FCL / Pojav / Zalith 等移动启动器自动放大界面，
@@ -34,7 +38,7 @@ MML 服务器实例（整合包）的独立更新器：读取 MML 生成的 `ser
 
 ## 快速开始
 
-### Java Agent（推荐，Prism / HMCL / PCL2 通用）
+### Java Agent（推荐）
 
 把 jar 挂到游戏 JVM：
 
@@ -45,8 +49,7 @@ MML 服务器实例（整合包）的独立更新器：读取 MML 生成的 `ser
 - 等号右边是 **`server.json` 的完整地址**（也可以是本地路径），不是发布目录。
 - 工作目录必须是游戏目录（`.minecraft`）；启动器没设置时加
   `-Dmml.serverSync.gameDir=D:\Instance\.minecraft`。
-- 识别到 MML 启动器时会自动跳过同步；要在 MML 下强制测试，设环境变量
-  `MML_SKIP=true`。
+- 识别到 MML 启动器时会自动跳过；要在 MML 下强制测试，设环境变量 `MML_SKIP=true`。
 
 ### 命令行
 
@@ -56,14 +59,17 @@ java -jar mml-server-sync.jar -m https://example.com/server.json -g "D:\Instance
 
 常用参数：
 
-```text
---force          忽略清单指纹，强制同步
---dry-run        只打印计划，不下载、不删除、不解压、不写状态
---skip=mods/a.jar,mods/b.jar
-                 指定自选模组本次不下载
---no-gui         不显示进度窗
---no-delete      不删除旧清单里已移除的受管文件
-```
+| 参数 | 说明 |
+| --- | --- |
+| `--force` | 忽略清单指纹，强制重新读取清单并同步 |
+| `--dry-run` | 只打印计划，不下载、不删除、不解压、不写状态 |
+| `--skip` | 指定自选模组本次不下载；可重复或逗号分隔 |
+| `--no-delete` | 不删除旧清单里已移除的受管文件 |
+| `--no-gui` | 不显示进度窗 |
+
+完整参数、退出码见 [docs/cli.md](docs/cli.md)。
+
+### 启动前脚本
 
 放进启动器的「启动前执行命令」时，失败要阻止启动：
 
@@ -76,6 +82,30 @@ if errorlevel 1 exit /b 1
 同步日志默认写在
 `<game-dir>/.mml-server-sync/mml-server-sync.log`。
 
+## 配置目录：四种同步方式
+
+MML 的「配置文件」页按目录选一种：
+
+|  | 整棵子树 | 仅当前层 |
+| --- | --- | --- |
+| **压缩包** | 压缩包整包同步：整包解压前先删旧目录 | 压缩包本目录同步：只覆盖当前层，不删客户端目录 |
+| **逐文件** | 逐文件整目录同步：子树里的文件逐个进 `Files` | 逐文件本目录同步：只有当前层的文件逐个进 `Files` |
+
+另外还有两个辅助状态：
+
+- **不同步**：这个目录不参与同步，父目录整包时也会被排除；
+- **删除目录**：生成空 zip + `Over`，客户端据此删除该目录。
+
+选择原则：
+
+- 目录完全由发布端托管、不需要保留玩家私有文件 → **压缩包整包同步**；
+- 目录里还有玩家私有文件/子目录 → **压缩包本目录同步** 或 **逐文件本目录同步**；
+- 需要逐文件增量、逐文件可选、保留清单外文件 → **逐文件整目录 / 逐文件本目录**；
+- 玩家完全私有的目录 → **不同步**；
+- 需要清理旧目录 → **删除目录**，不要靠删 `Archives` 条目。
+
+本更新器支持这四种方式；压缩包部分只支持 zip，MML 原生还支持 tar / tar.gz / tar.xz。
+
 ## 自选模组
 
 清单里 `Optional: true` 的条目按这次的选择决定是否下载：
@@ -86,26 +116,24 @@ if errorlevel 1 exit /b 1
 勾选不会主动改变启用/禁用状态：本地已有 `xxx.jar` 就更新 `xxx.jar`，已有
 `xxx.jar.disabled` 就更新那份，不会因为一次更新把它改回启用。
 
-自动弹窗默认**每次启动都出现**，清单指纹命中、包版本未变的启动也一样；勾选
+自动弹窗默认**每次启动都出现**，清单指纹命中、版本未变的启动也一样；勾选
 「记住我的选择，以后不再显示」后写入 `optional-prompt.txt`，此后只在自选模组
-新增 / 内容变化时弹。进度窗上的「自选模组」按钮可随时管理全部可选模组。
+新增 / 内容变化时弹。弹窗确认后才开始下载，没勾的模组不会被后台提前下载。
 
 无图形界面、`--no-ask` 或弹窗不可用时：没有记录的条目**不下载**，已有记录按记录
 执行（`1` 更新，`0` 跳过）。`--skip` / `--skip-file` 指定本次不下载的路径；
-Agent 模式用 `-Dmml.serverSync.skip=...` 或环境变量 `MML_SERVER_SYNC_SKIP`。
+Agent 模式还可用 `-Dmml.serverSync.skip=...` 或环境变量 `MML_SERVER_SYNC_SKIP`。
 
 选择记录在 `<状态目录>/optional-state.txt`（内容哈希 + 清单路径 + `1`/`0`）；
 旧版 `skipped.txt` 会自动迁移成「跳过」后删除。
 
-## 同步规则与删除
+## 更新器扩展
 
-旧清单有、当前清单没有的受管文件会删除：原名和同名的 `.disabled` / `.disable`
-副本一起清掉（与 MML 原生删除一致）。这次没勾选的自选模组，旧文件会保留。
-`--no-delete` 可只跳过删除步骤。
+这两份文件不是 MML 的设计，MML 不生成也不读取，需要发布端手动额外放置：
 
-MML 只生成 `server.json`（以及 `server.json.sha1` 指纹），**不会生成
-`server.json.sync.json`**；这个旁文件是本更新器的扩展功能，不是 MML 的设计，
-需要发布端手动额外放到清单同目录：
+### `server.json.sync.json`
+
+放在 `server.json` 同目录，更新器按 `<清单 URL>.sync.json` 读取：
 
 ```json
 {
@@ -114,19 +142,20 @@ MML 只生成 `server.json`（以及 `server.json.sha1` 指纹），**不会生�
 }
 ```
 
-- `Removed`：历史废弃路径，首次同步与跨版本升级都能清理；仍在清单里、受屏蔽保护、
-  归档目录内和越界的路径一律不删。
-- `Ignore`：目录前缀 / 通配 / 精确匹配，忽略大小写；命中的文件不下载、不覆盖，
-  自选模组也不会更新它，且不被 `Removed` 或旧清单差异删除。
-- 旁文件不存在（404 / 本地文件缺失）时按**空规则**处理，保留原来的旧清单差异删除；
-  返回网页、JSON 损坏或网络故障等「无法确认」的情况才不执行删除和空包墓碑删除
-  （下载照常；配置包的整目录覆盖仍按原规则执行）。
-- 旁文件只在真正执行同步时读取；改了旁文件要同时改动 `server.json`（让 `.sha1`
-  变化），否则清单指纹命中会跳过整次同步。
+- `Removed`：历史废弃路径，首次同步与跨版本升级都能清理；仍在清单里、受保护、
+  归档目录内和越界的路径不删。
+- `Ignore`：目录前缀 / 通配 / 精确匹配，忽略大小写；命中的文件不下载、不覆盖、
+  自选模组也不更新它，且不被 `Removed` 或旧清单差异删除。
+- 旁文件不存在（404 / 本地文件缺失）时按空规则处理，旧清单删除照常；只有网络故障、
+  返回网页或 JSON 损坏等无法确认的情况才停删除。
+- 改了旁文件要同时改动 `server.json`（让 `.sha1` 变化），否则指纹命中会跳过整次同步。
 
-这套 `Removed` / `Ignore` 是发布端按「所有配置逐文件同步」使用时的**更新器扩展能力**，
-对标 HMCL 服务器包的排除/强制删除；它不是 MML 的清单规范，MML 启动器既不生成也不
-读取这个旁文件，详见 [docs/differences.md](docs/differences.md)。
+### `server.json.notes.json`
+
+可选的模组简介，JSON 对象，键是清单里的相对路径，值是简介文字；没有时留空。
+
+> 同一份包同时给 MML 和本更新器用时，不要把关键删除/保护逻辑只放在扩展里：
+> MML 用户不会执行 `Removed` / `Ignore`。
 
 ## 状态与日志
 
@@ -150,9 +179,9 @@ MML 只生成 `server.json`（以及 `server.json.sha1` 指纹），**不会生�
 | [docs/cli.md](docs/cli.md) | 命令行参数、退出码、启动器 / 启动前脚本接入 |
 | [docs/optional-mods.md](docs/optional-mods.md) | 自选模组下载选择、弹窗、`optional-state.txt`、`--skip` |
 | [docs/sync.md](docs/sync.md) | 同步规则、旁文件、状态文件、下载与解压细节、已知边界 |
+| [docs/differences.md](docs/differences.md) | 与 MML 原生同步的协议边界、四种配置方式和差异 |
 | [docs/ui.md](docs/ui.md) | 进度窗、取消 / 暂停 / 继续、界面语言与缩放 |
 | [docs/build.md](docs/build.md) | 构建与发版、自更新索引格式 |
-| [docs/differences.md](docs/differences.md) | 与 MML 启动器原生同步的功能差异 |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题排查 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本更新记录 |
 
@@ -165,15 +194,13 @@ MML 只生成 `server.json`（以及 `server.json.sha1` 指纹），**不会生�
 
 ## 已知限制
 
-- 不会安装 Java、加载器或游戏本体，也不执行 MML 的模组依赖检查、在线信息回写、
-  实例设置回写。
-- 只支持 zip；配置包是 tar.gz / 7z 时需要自行转换或扩展 `Fs.extractZip`。
-- CurseForge 条目没带 URL 且没有 API Key 时依赖 CDN 命名规则，个别被作者关闭 CDN
-  的文件会失败（见 [docs/troubleshooting.md](docs/troubleshooting.md)）。
+- 不会安装 Java、加载器或游戏本体，也不执行 MML 的模组依赖检查、在线信息回写。
+- 不回写实例的游戏版本/加载器，也不维护 `mml-link`；MML 导出的 MMC/Prism 包里的
+  `mmc-pack.json` / `instance.cfg` 是静态的。
+- 更新器压缩包只支持 zip；MML 原生支持更多格式。
+- `server.json.sync.json` / `server.json.notes.json` 只对使用本更新器的启动器生效。
 - 清单条目没有 `ProjectId`（自定义条目）时，身份按路径计算：发布端换了文件名会被
-  当成新条目，跳过 / 选择记录也按路径记，下次会重新询问。
-- 旁文件读取失败（不是 404）时，本轮不执行旧文件 / 废弃列表删除和空包墓碑删除；
-  需要清理旧文件时先修复旁文件。
+  当成新条目，选择记录也按路径记，下次会重新询问。
 
 ## 构建
 
