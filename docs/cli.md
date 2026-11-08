@@ -41,6 +41,8 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `--skip` | 这次不启用的自选模组，清单相对路径；可重复或逗号分隔 |
 | `--skip-file` | 从文件读要跳过的路径，UTF-8，一行一个，`#` 开头忽略 |
 | `--no-gui` / `--gui` | 关 / 开进度窗口（默认开，headless 自动关） |
+| `--ask-on-failure` | 更新失败时弹窗询问：重试 / 跳过本次更新 / 关闭游戏（Agent 在图形界面可用时默认开启） |
+| `--ui-scale` | 界面缩放倍数，仅支持 `--ui-scale=2.5` 写法；桌面默认 1.0，移动启动器自动放大 |
 | `--no-ask` | 不弹自选模组勾选窗（无记录时按禁用安装） |
 | `--no-update` / `--update` | 关 / 开自更新（默认开） |
 | `--update-index` | 自更新索引地址；默认项目主页的 `index.json` |
@@ -50,7 +52,7 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 
 `--lenient` 是 Agent 内部使用的开关（清单拉不到时只记日志、不中止启动），命令行一般不用。
 
-`--x=值` 与 `--x 值` 两种写法都支持。
+`--x=值` 与 `--x 值` 两种写法都支持（`--ui-scale` 例外，只认 `--ui-scale=值`）。
 
 ## 退出码
 
@@ -59,6 +61,7 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `0` | 成功；或版本未变 / 清单指纹命中而跳过；或取消时选了「跳过更新」 |
 | `1` | 同步失败；或取消时选了「结束游戏」 |
 | `2` | 参数错误 |
+| `3` | 更新失败提示框里选了「关闭游戏」（Agent 会据此中止启动） |
 
 ## 启动器接入
 
