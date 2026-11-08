@@ -10,7 +10,7 @@ import java.nio.file.Path;
  */
 public final class Main {
     /** 工具版本号，启动日志、--version 与自更新比较都用它 */
-    static final String VERSION = "1.5.2";
+    static final String VERSION = "1.6.0";
 
     private Main() {}
 
