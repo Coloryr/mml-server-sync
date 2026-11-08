@@ -94,8 +94,8 @@ final class Sync {
             if (!options.lenient) {
                 throw e;
             }
-            Log.error(Text.of(Msg.SYNC_INTERRUPTED_SKIPPING_THIS_SYNC)
-                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            Log.error(Text.of(Msg.SYNC_INTERRUPTED_SKIPPING_THIS_SYNC, reason));
             return Text.of(Msg.SYNC_INTERRUPTED_SYNC_SKIPPED);
         }
     }
