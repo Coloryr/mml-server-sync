@@ -39,6 +39,10 @@ public final class Agent {
         } catch (Throwable e) {
             throw new RuntimeException(Text.of(Msg.MML_SERVER_SYNC_UPDATE_FAILED_GAME_START_ABORTED), e);
         }
+        if (code == 3) {
+            // 玩家在失败提示框里选了「关闭游戏」：不是更新出错，别报成失败
+            throw new RuntimeException(Text.of(Msg.USER_CLOSED_GAME));
+        }
         if (code != 0) {
             throw new RuntimeException(Text.of(Msg.AGENT_EXIT_CODE, code));
         }
@@ -83,6 +87,9 @@ public final class Agent {
         }
         if (!guiEnabled()) {
             args.add("--no-gui");
+        } else {
+            // 有进度窗口时，失败要问一句：重试、跳过本次更新，还是关闭游戏
+            args.add("--ask-on-failure");
         }
         if (!updateEnabled()) {
             args.add("--no-update");

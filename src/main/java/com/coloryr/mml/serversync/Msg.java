@@ -248,7 +248,25 @@ enum Msg {
     UPDATE_PAUSED_WAITING("已暂停，等待选择", "Paused, waiting for a choice"),
     UPDATE_CANCELLED_MIDWAY("更新已取消，可能有文件已写入；下次启动会补齐", "Update cancelled; some files may have been written. The next launch will finish it."),
     GUI_UNAVAILABLE_HEADLESS("图形界面初始化失败，按无界面同步: %s", "GUI initialization failed, running headless: %s"),
-    FAILED_TO_OPEN_THE_CANCEL_DIALOG("取消确认框打开失败: %s", "Failed to open the cancel dialog: %s");
+    FAILED_TO_OPEN_THE_CANCEL_DIALOG("取消确认框打开失败: %s", "Failed to open the cancel dialog: %s"),
+    FAILURE_DIALOG_TITLE("更新未完成", "Update not finished"),
+    FAILURE_DIALOG_QUESTION("本次更新没有完成：%s\n\n你可以重试，也可以跳过本次更新直接进入游戏。", "The update did not finish: %s\n\nYou can retry, or skip this update and start the game."),
+    FAILURE_DIALOG_RETRY("重试", "Retry"),
+    FAILURE_DIALOG_SKIP("跳过更新", "Skip update"),
+    FAILURE_DIALOG_CLOSE("关闭游戏", "Close game"),
+    RETRYING_SYNC("正在重试更新…", "Retrying update..."),
+    UPDATE_FAILED_SKIPPED_BY_PLAYER("更新失败，玩家选择跳过本次更新；游戏将按当前文件启动", "Update failed; the player chose to skip it. The game will start with the files on disk."),
+    UPDATE_FAILED_CLOSED_BY_PLAYER("更新失败，玩家选择关闭游戏", "Update failed; the player chose to close the game"),
+    USER_CLOSED_GAME("已按你的选择关闭游戏（更新未完成）", "Game closed at your request (the update did not finish)"),
+    ASK_ON_FAILURE_PROMPT_FOR_A_CHOICE_WHEN_THE_UPDATE_FAILS("更新失败时弹窗询问：重试、跳过更新或关闭游戏", "Ask what to do when the update fails: retry, skip, or close the game"),
+    FAILED_TO_OPEN_THE_FAILURE_DIALOG("更新失败提示框打开失败: %s", "Failed to open the failure dialog: %s"),
+    FAILURE_REASON_NO_CONNECTION("连接不上更新服务器，请检查网络后重试", "Cannot reach the update server; check your connection and retry"),
+    FAILURE_REASON_TIMEOUT("连接更新服务器超时，请检查网络后重试", "Timed out talking to the update server; check your connection and retry"),
+    FAILURE_REASON_DNS("找不到更新服务器（域名解析失败），请检查网络或 DNS", "Update server not found (DNS lookup failed); check your network or DNS"),
+    FAILURE_REASON_SERVER_BUSY("更新服务器暂时不可用，请稍后重试", "The update server is temporarily unavailable; try again later"),
+    UI_SCALE_INFO("界面缩放 %s 倍（来源 %s；屏幕 %s，DPI %s，AWT 变换 %s，移动启动器 %s）", "UI scale %sx (source %s; screen %s, DPI %s, AWT transform %s, mobile launcher %s)"),
+    UI_SCALE_NEEDS_A_NUMBER("--ui-scale 需要一个数字: %s", "--ui-scale needs a number: %s"),
+    UI_SCALE_NOTE("  - 界面缩放：-Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=；移动启动器自动按固定倍数放大。", "  - UI scale: -Dmml.serverSync.uiScale=2.5 / MML_SERVER_SYNC_UI_SCALE / --ui-scale=; mobile launchers are scaled automatically.");
 
     private final String zh;
     private final String en;

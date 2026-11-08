@@ -91,7 +91,8 @@ final class Sync {
         } catch (IOException e) {
             // 游戏模式（javaagent 会带 --lenient）：服务器掉线、繁忙、传输中断都只跳过本次同步。
             // 这里不能把异常抛给 premain —— 那会让 JVM 直接终止，游戏根本起不来。
-            if (!options.lenient) {
+            // 开了 --ask-on-failure 时交给 Runner 弹窗，由玩家决定重试还是跳过。
+            if (!options.lenient || options.askOnFailure) {
                 throw e;
             }
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
@@ -126,7 +127,8 @@ final class Sync {
             current.resolveUrls(manifestUrl);
         } catch (IOException e) {
             // 清单没拉到等于一个文件都没动：游戏模式只记日志，别让服务器掉线锁死启动
-            if (!options.lenient) {
+            // （--ask-on-failure 时抛给 Runner 弹窗，让玩家选重试还是跳过）
+            if (!options.lenient || options.askOnFailure) {
                 throw e;
             }
             Log.error(Text.of(Msg.MANIFEST_FETCH_FAILED_SKIPPING_THIS_SYNC) + e.getMessage());

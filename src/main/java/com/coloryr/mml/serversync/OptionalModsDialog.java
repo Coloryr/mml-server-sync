@@ -3,7 +3,6 @@ package com.coloryr.mml.serversync;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
@@ -144,8 +143,10 @@ final class OptionalModsDialog {
 
     private static Result show(Component parent, List<Row> rows, String header,
                                boolean rememberChecked) {
+        // 窗口可能由宿主建好外观，这里补一次全局字体（幂等）
+        UiScale.apply();
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MODS_BUTTON), true);
-        dialog.setMinimumSize(new Dimension(720, 380));
+        dialog.setMinimumSize(UiScale.size(720, 380));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
         final DefaultTableModel model = new DefaultTableModel(
@@ -169,24 +170,24 @@ final class OptionalModsDialog {
         }
 
         final JTable table = new JTable(model);
-        table.setRowHeight(ROW_HEIGHT);
+        table.setRowHeight(UiScale.px(ROW_HEIGHT));
         table.setShowVerticalLines(false);
         table.setShowHorizontalLines(true);
         table.setGridColor(new Color(0xE8, 0xEA, 0xED));
-        table.setIntercellSpacing(new Dimension(0, 1));
+        table.setIntercellSpacing(UiScale.size(0, 1));
         table.setFillsViewportHeight(true);
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
-        table.getTableHeader().setPreferredSize(new Dimension(0, 30));
+        table.getTableHeader().setPreferredSize(UiScale.size(0, 30));
         table.setDefaultRenderer(Boolean.class, new CheckRenderer());
         table.setDefaultRenderer(String.class, new TextRenderer());
         TableColumnModel columns = table.getColumnModel();
-        columns.getColumn(0).setMinWidth(52);
-        columns.getColumn(0).setMaxWidth(52);
-        columns.getColumn(0).setPreferredWidth(52);
-        columns.getColumn(1).setPreferredWidth(210);
-        columns.getColumn(2).setPreferredWidth(320);
-        columns.getColumn(3).setPreferredWidth(170);
+        columns.getColumn(0).setMinWidth(UiScale.px(52));
+        columns.getColumn(0).setMaxWidth(UiScale.px(52));
+        columns.getColumn(0).setPreferredWidth(UiScale.px(52));
+        columns.getColumn(1).setPreferredWidth(UiScale.px(210));
+        columns.getColumn(2).setPreferredWidth(UiScale.px(320));
+        columns.getColumn(3).setPreferredWidth(UiScale.px(170));
 
         table.addMouseListener(new MouseAdapter() {
             @Override
@@ -215,7 +216,7 @@ final class OptionalModsDialog {
         });
 
         JScrollPane scroll = new JScrollPane(table);
-        scroll.setPreferredSize(new Dimension(780, 360));
+        scroll.setPreferredSize(UiScale.size(780, 360));
         scroll.setBorder(BorderFactory.createLineBorder(new Color(0xDD, 0xE0, 0xE4)));
         scroll.getViewport().setBackground(table.getBackground());
 
@@ -259,26 +260,26 @@ final class OptionalModsDialog {
         ok.addActionListener(event -> dialog.dispose());
 
         JLabel title = new JLabel(header);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
+        title.setFont(title.getFont().deriveFont(Font.BOLD, UiScale.font(14f)));
         JLabel hint = new JLabel(Text.of(Msg.HINT_UNSELECTED_DISABLED));
-        hint.setFont(hint.getFont().deriveFont(Font.PLAIN, 11f));
+        hint.setFont(hint.getFont().deriveFont(Font.PLAIN, UiScale.font(11f)));
         hint.setForeground(new Color(0x70, 0x76, 0x7D));
-        JPanel head = new JPanel(new BorderLayout(0, 4));
+        JPanel head = new JPanel(new BorderLayout(0, UiScale.px(4)));
         head.add(title, BorderLayout.NORTH);
         head.add(hint, BorderLayout.SOUTH);
 
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(10), 0));
         left.add(count);
         left.add(all);
         left.add(never);
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(8), 0));
         right.add(ok);
         JPanel footer = new JPanel(new BorderLayout());
         footer.add(left, BorderLayout.WEST);
         footer.add(right, BorderLayout.EAST);
 
-        JPanel root = new JPanel(new BorderLayout(0, 10));
-        root.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
+        JPanel root = new JPanel(new BorderLayout(0, UiScale.px(10)));
+        root.setBorder(UiScale.emptyBorder(14, 14, 14, 14));
         root.add(head, BorderLayout.NORTH);
         root.add(scroll, BorderLayout.CENTER);
         root.add(footer, BorderLayout.SOUTH);
@@ -286,6 +287,7 @@ final class OptionalModsDialog {
         refresh.run();
         dialog.setContentPane(root);
         dialog.pack();
+        UiScale.fit(dialog);
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
 
@@ -352,7 +354,7 @@ final class OptionalModsDialog {
                                                        boolean focus, int row, int column) {
             super.getTableCellRendererComponent(table, value, selected, focus, row, column);
             int index = table.convertColumnIndexToModel(column);
-            setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
+            setBorder(UiScale.emptyBorder(0, 10, 0, 10));
             setBackground(rowBackground(table, selected, row));
             if (!selected) {
                 setForeground(foregroundOf(index, value));

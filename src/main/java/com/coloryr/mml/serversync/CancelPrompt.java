@@ -5,7 +5,6 @@ import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.awt.event.KeyEvent;
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
@@ -56,13 +55,14 @@ final class CancelPrompt {
     }
 
     private static Choice show(Component parent) {
+        UiScale.apply();
         final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.CANCEL_DIALOG_TITLE), true);
         final Choice[] choice = {Choice.CONTINUE};
         // 点对话框的关闭按钮等于「继续更新」：释放资源后照常返回，不留一个只隐藏未释放的窗口
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
         JLabel question = new JLabel(Text.of(Msg.CANCEL_DIALOG_QUESTION));
-        question.setBorder(BorderFactory.createEmptyBorder(0, 0, 14, 0));
+        question.setBorder(UiScale.emptyBorder(0, 0, 14, 0));
 
         JButton cont = new JButton(Text.of(Msg.CANCEL_DIALOG_CONTINUE));
         cont.addActionListener(event -> {
@@ -85,19 +85,20 @@ final class CancelPrompt {
             dialog.dispose();
         }, KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
 
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(8), 0));
         buttons.add(cont);
         buttons.add(skip);
         buttons.add(end);
 
         JPanel root = new JPanel(new BorderLayout());
-        root.setBorder(BorderFactory.createEmptyBorder(16, 18, 14, 18));
+        root.setBorder(UiScale.emptyBorder(16, 18, 14, 18));
         root.add(question, BorderLayout.CENTER);
         root.add(buttons, BorderLayout.SOUTH);
 
         dialog.setContentPane(root);
         dialog.pack();
         dialog.setMinimumSize(dialog.getPreferredSize());
+        UiScale.fit(dialog);
         dialog.setLocationRelativeTo(parent);
         dialog.setVisible(true);
         return choice[0];

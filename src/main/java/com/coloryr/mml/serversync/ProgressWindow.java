@@ -10,7 +10,6 @@ import java.awt.GridLayout;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.concurrent.atomic.AtomicBoolean;
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -68,6 +67,8 @@ final class ProgressWindow implements Progress {
         } catch (Exception ignored) {
             // 系统外观不可用时用默认外观，不影响功能
         }
+        // 必须在外观设置之后、组件创建之前：setLookAndFeel 会重刷全局字体
+        UiScale.apply();
 
         frame = new JFrame(TITLE);
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
@@ -81,17 +82,17 @@ final class ProgressWindow implements Progress {
         frame.setAlwaysOnTop(true);
 
         titleLabel = new JLabel(Text.of(Msg.SYNCING_SERVER_INSTANCE));
-        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 13f));
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, UiScale.font(13f)));
         stageLabel = new JLabel(Text.of(Msg.PREPARING));
         detailLabel = new JLabel(" ");
-        detailLabel.setFont(detailLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        detailLabel.setFont(detailLabel.getFont().deriveFont(Font.PLAIN, UiScale.font(11f)));
 
         bar = new JProgressBar(0, 100);
         bar.setStringPainted(true);
         bar.setValue(0);
-        bar.setPreferredSize(new Dimension(420, 20));
+        bar.setPreferredSize(UiScale.size(420, 20));
 
-        JPanel head = new JPanel(new GridLayout(2, 1, 0, 2));
+        JPanel head = new JPanel(new GridLayout(2, 1, 0, UiScale.px(2)));
         head.add(titleLabel);
         head.add(stageLabel);
 
@@ -108,21 +109,22 @@ final class ProgressWindow implements Progress {
         optionalButton.setPreferredSize(buttonSize);
         cancelButton.setPreferredSize(buttonSize);
         // 文件名自己占一行：长路径不会再把「自选模组」按钮挤来挤去；按钮单独一行靠右
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(8), 0));
         buttons.add(optionalButton);
         buttons.add(cancelButton);
-        JPanel south = new JPanel(new BorderLayout(0, 6));
+        JPanel south = new JPanel(new BorderLayout(0, UiScale.px(6)));
         south.add(detailLabel, BorderLayout.NORTH);
         south.add(buttons, BorderLayout.SOUTH);
 
-        JPanel root = new JPanel(new BorderLayout(0, 8));
-        root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        JPanel root = new JPanel(new BorderLayout(0, UiScale.px(8)));
+        root.setBorder(UiScale.emptyBorder(14, 16, 14, 16));
         root.add(head, BorderLayout.NORTH);
         root.add(bar, BorderLayout.CENTER);
         root.add(south, BorderLayout.SOUTH);
 
         frame.setContentPane(root);
         frame.pack();
+        UiScale.fit(frame);
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
     }
