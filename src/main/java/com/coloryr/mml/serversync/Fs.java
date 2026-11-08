@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -120,6 +122,53 @@ final class Fs {
         });
     }
 
+    /**
+     * 删除目录，但跳过 `keep` 判定为真的文件；目录里还有被保护文件时保留该目录。
+     *
+     * - `dir`: 要清理的目录
+     * - `root`: 游戏目录，用于算出相对路径交给 `keep`
+     * - `keep`: 入参是相对 `root` 的路径键，返回 true 表示保留
+     *
+     * # 返回值
+     *
+     * 被保留的文件数
+     */
+    static int deleteDirectory(Path dir, Path root, Predicate<String> keep) throws IOException {
+        if (!Files.exists(dir)) {
+            return 0;
+        }
+        Path base = root.toAbsolutePath().normalize();
+        final int[] kept = {0};
+        Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                String key = pathKey(base.relativize(file.toAbsolutePath().normalize()).toString());
+                if (!key.isEmpty() && keep.test(key)) {
+                    kept[0]++;
+                    return FileVisitResult.CONTINUE;
+                }
+                Files.deleteIfExists(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path directory, IOException exc) throws IOException {
+                if (exc != null) {
+                    throw exc;
+                }
+                try (Stream<Path> children = Files.list(directory)) {
+                    if (children.findAny().isPresent()) {
+                        // 还有被保护的文件：目录必须留下
+                        return FileVisitResult.CONTINUE;
+                    }
+                }
+                Files.deleteIfExists(directory);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return kept[0];
+    }
+
     /** zip 里没有任何文件或目录条目；用于「空包 + Over=true = 删除目录」的显式删除 */
     static boolean isEmptyZip(Path zip) throws IOException {
         try (ZipFile file = new ZipFile(zip.toFile(), java.nio.charset.StandardCharsets.UTF_8)) {
@@ -128,6 +177,16 @@ final class Fs {
     }
 
     static void extractZip(Path zip, Path target, boolean base) throws IOException {
+        extractZip(zip, target, base, null);
+    }
+
+    /**
+     * 解压 zip；`skip` 判定为真的条目不解压（仍做越界校验），用于让屏蔽规则盖住归档内容。
+     *
+     * - `skip`: 入参是压缩包内的条目名；为 null 表示全部解压
+     */
+    static void extractZip(Path zip, Path target, boolean base, Predicate<String> skip)
+            throws IOException {
         if (!zip.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
             throw new IOException(Text.of(Msg.ONLY_ZIP_ARCHIVES_ARE_SUPPORTED) + zip);
         }
@@ -156,6 +215,9 @@ final class Fs {
                 Path out = resolveSafe(target, name);
                 if (entry.isDirectory()) {
                     Files.createDirectories(out);
+                    continue;
+                }
+                if (skip != null && skip.test(name)) {
                     continue;
                 }
                 Files.createDirectories(out.getParent());
