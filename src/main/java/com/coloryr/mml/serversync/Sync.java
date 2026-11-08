@@ -752,9 +752,14 @@ final class Sync {
     }
 
     /**
-     * 取清单同目录下的同步规则旁文件。旁文件缺失、返回网页或格式错误时本轮按
-     * 「规则不可用」处理：不阻断同步，但不执行任何删除，避免在无法确认屏蔽范围时
-     * 误删玩家文件。
+     * 取清单同目录下的同步规则旁文件。
+     *
+     * 读到且能解析：按规则执行。其余任何情况（404、超时、5xx、返回网页、JSON 坏）
+     * 都按「规则不可用」处理：不阻断同步，但本轮不执行任何文件删除，
+     * 避免在无法确认屏蔽范围时误删玩家文件。
+     *
+     * 归档解压不受这条门禁约束：`Over=true` 是「整包替换目录」的语义，
+     * 与逐文件删除无关，见 {@link #clearArchiveDirectory}。
      */
     private SyncRules fetchSyncRules(String manifestUrl) {
         try {
@@ -835,8 +840,9 @@ final class Sync {
                 continue;
             }
             Path target = safeRemovalTarget(path);
-            // 路径不存在（含禁用变体）时静默跳过，删除列表因此可以长期挂在发布端
-            if (target == null || existingVariant(target) == null || !queued.add(key)) {
+            // 只处理清单里那个名字：玩家停用的 .disabled 副本不在删除范围内，
+            // 因此只有该名字存在时才排进计划；删除列表可以长期挂在发布端。
+            if (target == null || !Files.isRegularFile(target) || !queued.add(key)) {
                 continue;
             }
             retiredPaths.add(path);
@@ -929,11 +935,9 @@ final class Sync {
      * 旁文件不可用时不清空，只覆盖同名文件，避免误删无法确认的路径。
      */
     private void clearArchiveDirectory(String dir, Path target) throws IOException {
-        if (!rulesAvailable) {
-            info(Text.of(Msg.ARCHIVE_CLEAR_SKIPPED, dir));
-            return;
-        }
-        if (rules.ignoreCount() == 0) {
+        // 归档是「整包替换目录」的语义，不属于逐文件删除：这里始终按旧行为清空。
+        // 旁文件可用时保留屏蔽项；不可用时按旧行为整目录清空，兼容其他整合包的 zip 用法。
+        if (!rulesAvailable || rules.ignoreCount() == 0) {
             Fs.deleteDirectory(target);
             return;
         }
@@ -977,6 +981,11 @@ final class Sync {
             Msg reason = retiredPaths.contains(path)
                     ? Msg.REMOVING_RETIRED_FILE : Msg.REMOVING_OLD_FILE_PATH;
             info(Text.of(reason, path));
+            // 玩家停用的副本不动：保留文件，重新启用时不必重新下载
+            if (Files.isRegularFile(withSuffix(target, DISABLED_SUFFIX))
+                    || Files.isRegularFile(withSuffix(target, LEGACY_DISABLE_SUFFIX))) {
+                info(Text.of(Msg.RETIRED_KEPT_DISABLED, path));
+            }
         }
         for (String dir : dirs) {
             Path target = Fs.resolveSafe(options.gameDir, dir);
