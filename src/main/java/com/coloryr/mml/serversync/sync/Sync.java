@@ -1,13 +1,22 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.sync;
 
+import java.awt.Component;
+import java.awt.Container;
+import java.awt.GraphicsEnvironment;
+import java.awt.Window;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -18,13 +27,25 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.swing.JButton;
 
 import com.coloryr.mml.serversync.host.Progress;
+import com.coloryr.mml.serversync.ui.OptionalModsDialog;
+import com.coloryr.mml.serversync.ui.ProgressWindow;
+import com.coloryr.mml.serversync.update.Updater;
+import com.coloryr.mml.serversync.util.CancelledException;
+import com.coloryr.mml.serversync.util.Cancels;
+import com.coloryr.mml.serversync.util.Json;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.SyncAbortException;
+import com.coloryr.mml.serversync.util.Text;
 
 /** 一次服务器实例更新。 */
-final class Sync {
+public final class Sync {
     /** 禁用后缀：与 MMC / HMCL 一致 */
     private static final String DISABLED_SUFFIX = SyncRules.DISABLED_SUFFIX;
     /** 旧版禁用后缀，读取时仍认 */
@@ -51,24 +72,20 @@ final class Sync {
     /** 玩家是否勾过「以后不再显示」：没勾时每次启动都弹窗，勾了只在有新增或变化时弹 */
     private boolean promptSuppressed;
     /** 本轮由发布端删除列表纳入的路径，用于区分「废弃删除」与「旧清单差异删除」 */
-    private final Set<String> retiredPaths = new java.util.HashSet<>();
+    private final Set<String> retiredPaths = new HashSet<>();
     /** 本轮的同步规则（删除列表与屏蔽规则）；未读到旁文件时为空规则 */
     private SyncRules rules = SyncRules.empty();
-    /**
-     * 旁文件是否可用。默认 true：指纹命中的快速路径不读旁文件，只处理自选模组；
-     * 只有读取失败、返回网页或 JSON 损坏才置 false，此时本轮不执行逐文件删除。
-     * 旁文件不存在（404）按空规则处理，仍然保持 MML 原生的删除行为。
-     */
+    /** 旁文件读取失败时本轮不执行删除。 */
     private boolean rulesAvailable = true;
 
-    Sync(Options options, Progress ui) {
+    public Sync(Options options, Progress ui) {
         this.options = options;
         this.downloader = new Downloader(options.apiKey, options.quiet);
         this.tempDir = options.stateDir.resolve("tmp");
         this.ui = ui == null ? Progress.NONE : ui;
     }
 
-    /** 打开中的自选模组弹窗：玩家确认后 latch 归零 */
+/** 打开中的自选模组弹窗：玩家确认后 latch 归零 */
     private static final class PendingChoice {
         final CountDownLatch done = new CountDownLatch(1);
 
@@ -81,11 +98,9 @@ final class Sync {
     /**
      * 跑一次同步
      *
-     * # 返回值
-     *
-     * 一句话结果，给进度窗口与日志用
+     * @return 一句话结果，给进度窗口与日志用
      */
-    String run() throws IOException {
+    public String run() throws IOException {
         try {
             return runInner();
         } catch (IOException e) {
@@ -101,6 +116,12 @@ final class Sync {
         }
     }
 
+    /**
+     * 执行同步主流程。
+     *
+     * @return 一句话结果
+     * @throws IOException 同步失败时
+     */
     private String runInner() throws IOException {
         String manifestUrl;
         byte[] data;
@@ -145,7 +166,7 @@ final class Sync {
         // 无法用具体窗口类型接线，扫描方式两种运行形态通用。
         if (canAsk()) {
             optionalNotes = fetchOptionalNotes(manifestUrl);
-            javax.swing.JButton button = findOptionalButton();
+            JButton button = findOptionalButton();
             if (button != null) {
                 button.setEnabled(true);
                 button.addActionListener(event -> openManageDialog());
@@ -181,7 +202,7 @@ final class Sync {
         }
 
         List<String> removedDirs = new ArrayList<>();
-        Set<String> removedFiles = new java.util.HashSet<>();
+        Set<String> removedFiles = new HashSet<>();
         String selfJar = selfJarRelative();
         planRemovals(old, current, removedFiles, removedDirs, selfJar);
         if (options.dryRun) {
@@ -189,7 +210,7 @@ final class Sync {
             printPlan(current, old, removedFiles, removedDirs);
             return Text.of(Msg.PLAN_ONLY_NO_FILES_CHANGED);
         }
-        checkCancelled();
+        Cancels.check();
         ui.stage(Text.of(Msg.CLEANING_OLD_FILES));
         if (!options.noDelete) {
             applyRemovals(removedFiles, removedDirs);
@@ -248,7 +269,7 @@ final class Sync {
         int done = downloadAll(tasks, total);
 
         if (baseTemp != null) {
-            checkCancelled();
+            Cancels.check();
             ui.stage(Text.of(Msg.EXTRACTING_BASE_PACK));
             Fs.extractZip(baseTemp, options.baseDir, true);
             Files.deleteIfExists(baseTemp);
@@ -261,7 +282,7 @@ final class Sync {
             ui.stage(Text.of(Msg.EXTRACTING_ARCHIVES));
         }
         for (ArchivePlan plan : downloaded) {
-            checkCancelled();
+            Cancels.check();
             Path target = Fs.resolveSafe(options.gameDir, plan.item.dir);
             if (plan.item.deleteOld && Fs.isEmptyZip(plan.temp)) {
                 // 空包 + 覆盖 = 显式删除该目录（发布端用它替代「删条目」）。
@@ -283,7 +304,7 @@ final class Sync {
             ui.step(++done, plan.item.dir);
         }
 
-        checkCancelled();
+        Cancels.check();
         // 换路径的旧自选模组必须在勾选确认后再删：自动弹窗是异步的，
         // planRemovals 执行时选择可能还没定。
         cleanupReplacedOptionals(old, current);
@@ -296,7 +317,8 @@ final class Sync {
 
     /**
      * 等自选模组弹窗确认，把结果并进本次勾选。
-     * 必须发生在 changedFiles 之前：没勾的模组不能被后台提前下载。
+     *
+     * @param current 当前清单
      */
     private void applyOptionalChoices(Manifest current) throws IOException {
         PendingChoice pending = pendingDialog.get();
@@ -309,7 +331,7 @@ final class Sync {
                 throw new IOException(Text.of(Msg.DOWNLOAD_INTERRUPTED), e);
             }
         }
-        checkCancelled();
+        Cancels.check();
         consumeChoice();
         applySelections(current);
     }
@@ -317,18 +339,17 @@ final class Sync {
     /**
      * 清理换了路径、且这次勾选了更新的旧自选模组。
      *
-     * 自动弹窗和下载并行，planRemovals 执行时玩家还没确认；旧路径不能在那时删，
-     * 否则玩家取消勾选后旧版本已经没了。这里等 applyOptionalChoices 收尾后再删。
+     * 自动弹窗和下载并行，planRemovals 执行时玩家还没确认；旧路径不能在那时删，否则玩家取消勾选后旧版本已经没了。
      *
-     * - `old`: 旧清单
-     * - `current`: 新清单
+     * @param old 旧清单
+     * @param current 新清单
      */
     private void cleanupReplacedOptionals(Manifest old, Manifest current) throws IOException {
         if (old == null || options.noDelete || !rulesAvailable) {
             return;
         }
         Map<String, Manifest.FileEntry> byIdentity = new HashMap<>();
-        Set<String> live = new java.util.HashSet<>();
+        Set<String> live = new HashSet<>();
         for (Manifest.FileEntry item : current.files) {
             byIdentity.put(item.identity(), item);
             live.add(Fs.pathKey(item.path));
@@ -366,11 +387,7 @@ final class Sync {
     /**
      * 把玩家确认的结果并进勾选，并按需要记住「以后不再显示」
      *
-     * 只并入弹窗展示过的行：部分行弹窗（如仅新增条目）确认时，未展示行的选择保持原状。
-     *
-     * # 返回值
-     *
-     * 选择或「以后不再显示」的标记有变化时返回 true
+     * @return 选择或「以后不再显示」的标记有变化时返回 true
      */
     private boolean consumeChoice() {
         if (lastChoice == null) {
@@ -397,7 +414,8 @@ final class Sync {
 
     /**
      * 记录本次勾选结果并写日志：勾选 = 这次下载/更新，未勾 = 这次跳过。
-     * 文件启用/禁用由本地原有的文件名决定，这里不改名。
+     *
+     * @param current 当前清单
      */
     private void applySelections(Manifest current) {
         ui.stage(Text.of(Msg.OPTIONAL_APPLY_STAGE));
@@ -426,10 +444,9 @@ final class Sync {
     /**
      * 清单指纹命中、只改了勾选时，把这次新勾上但本地缺失 / 内容过期的自选模组补下。
      *
-     * 指纹没变说明清单和上次一样，走不到下载阶段；但玩家可以在「每次启动」的弹窗里
-     * 勾上上次跳过的模组，这时必须把文件取回来，否则选择只写进了状态文件。
+     * 指纹没变说明清单和上次一样，走不到下载阶段；但玩家可以在「每次启动」的弹窗里勾上上次跳过的模组，这时必须把文件取回来，否则选择只写进了状态文件。
      *
-     * - `current`: 当前清单（本地副本，URL 已解析）
+     * @param current 当前清单（本地副本，URL 已解析）
      */
     private void downloadSelectedOptionals(Manifest current) throws IOException {
         List<DownloadTask> tasks = new ArrayList<>();
@@ -455,7 +472,7 @@ final class Sync {
         downloadAll(tasks, tasks.size());
     }
 
-    /** 按钮回调：弹管理窗；已有弹窗开着、还没解析到清单或 dry-run 时忽略 */
+/** 按钮回调：弹管理窗；已有弹窗开着、还没解析到清单或 dry-run 时忽略 */
     private void openManageDialog() {
         Manifest current = manifest;
         if (options.dryRun || current == null || pendingDialog.get() != null) {
@@ -468,16 +485,10 @@ final class Sync {
     /**
      * 打开勾选窗，返回可用于等待的句柄
      *
-     * 窗口在事件线程上开，本方法立即返回；调用方要等玩家确认就 await 返回的句柄。
-     * 已有弹窗开着时返回 null——同一时刻只允许一扇。
-     *
-     * - `rows`: 要列出的条目
-     * - `header`: 表格上方的说明文字
-     * - `rememberChecked`: 「以后不再显示」的初始勾选状态
-     *
-     * # 返回值
-     *
-     * 本次弹窗的句柄；已有弹窗开着时返回 null
+     * @param rows 要列出的条目
+     * @param header 表格上方的说明文字
+     * @param rememberChecked 「以后不再显示」的初始勾选状态
+     * @return 本次弹窗的句柄；已有弹窗开着时返回 null
      */
     private PendingChoice openDialog(List<OptionalModsDialog.Row> rows, String header,
                                      boolean rememberChecked) {
@@ -511,11 +522,7 @@ final class Sync {
     /**
      * 读清单里的可选条目与上次的选择，填好本次的勾选
      *
-     * @param current 清单
-     *
-     * # 返回值
-     *
-     * 新增或内容有变化的可选条目；非空说明清单这边动过自选模组
+     * @return 新增或内容有变化的可选条目；非空说明清单这边动过自选模组
      */
     private List<Manifest.FileEntry> prepareOptionals(Manifest current) {
         OptionalState.Loaded state = OptionalState.load(options.stateDir);
@@ -549,17 +556,23 @@ final class Sync {
     /**
      * 该不该弹自选模组窗
      *
-     * 没勾「以后不再显示」时每次启动都弹；勾了就只在有新增或内容变化时弹——
-     * 否则以后新增的自选模组玩家永远没机会启用。
+     * 没勾「以后不再显示」时每次启动都弹；勾了就只在有新增或内容变化时弹——否则以后新增的自选模组玩家永远没机会启用。
      *
      * @param changedCount 新增或内容变化的可选条目数
+     * @return 需要弹窗时返回 true
      */
     private boolean shouldPrompt(int changedCount) {
         return !options.dryRun && options.skip.isEmpty() && canAsk()
                 && (!promptSuppressed || changedCount > 0);
     }
 
-    /** 弹窗标题：首次同步 / 每次启动 / 有新增或变化三种场景 */
+    /**
+     * 弹窗标题：首次同步 / 每次启动 / 有新增或变化三种场景
+     *
+     * @param changedCount 新增或内容变化数
+     * @param total 自选模组总数
+     * @return 弹窗标题
+     */
     private String promptHeader(int changedCount, int total) {
         if (optionalState.firstRun) {
             return Text.of(Msg.HEADER_FIRST_RUN);
@@ -573,14 +586,9 @@ final class Sync {
     /**
      * 指纹命中时的弹窗：本地清单副本与远端字节相同，直接拿来组装行数据
      *
-     * 已勾「以后不再显示」时连副本都不必解析——清单没变就不会有新增或变化，
-     * 这条快速路径保持一次请求、零解析。
+     * 已勾「以后不再显示」时连副本都不必解析——清单没变就不会有新增或变化，这条快速路径保持一次请求、零解析。
      *
-     * @param manifestUrl 清单地址，用于取发布端写的简介
-     *
-     * # 返回值
-     *
-     * 玩家改过选择时的一句话结果；不弹或没改动时为 null
+     * @return 玩家改过选择时的一句话结果；不弹或没改动时为 null
      */
     private String promptFromLocalManifest(String manifestUrl) {
         if (!shouldPrompt(0)) {
@@ -599,16 +607,7 @@ final class Sync {
     /**
      * 没有文件要更新时弹窗，选完只补下这次新勾上的可选文件
      *
-     * 这条路径通常不下载文件；只有玩家在「每次启动」的弹窗里勾上上次跳过的模组时，
-     * 才把那个文件补回来。选择与标记写完就生效，失败只记日志，不拦住启动。
-     *
-     * @param current      清单，用于组装行与补下新勾选的文件
-     * @param changedCount 新增或内容变化的可选条目数
-     * @param manifestUrl  清单地址，用于取发布端写的简介
-     *
-     * # 返回值
-     *
-     * 玩家改过选择时的一句话结果；不弹或没改动时为 null
+     * @return 玩家改过选择时的一句话结果；不弹或没改动时为 null
      */
     private String promptOnUnchanged(Manifest current, int changedCount, String manifestUrl) {
         if (!shouldPrompt(changedCount)) {
@@ -640,7 +639,12 @@ final class Sync {
         return Text.of(Msg.OPTIONAL_CHOICES_SAVED);
     }
 
-    /** 弹窗行数据：状态区分新增 / 需更新 / 已同步，并带当前启用状态后缀 */
+    /**
+     * 弹窗行数据：状态区分新增 / 需更新 / 已同步，并带当前启用状态后缀
+     *
+     * @param current 当前清单
+     * @return 弹窗行数据
+     */
     private List<OptionalModsDialog.Row> buildRows(Manifest current) {
         List<OptionalModsDialog.Row> rows = new ArrayList<>();
         for (Manifest.FileEntry item : current.files) {
@@ -667,11 +671,8 @@ final class Sync {
     /**
      * 取发布端写的自选模组简介：清单地址加 .notes.json，取不到就是没有
      *
-     * - `manifestUrl`: 清单地址
-     *
-     * # 返回值
-     *
-     * 路径 → 简介文字；文件不存在或格式不对时为空表
+     * @param manifestUrl 清单地址
+     * @return 路径 → 简介文字；文件不存在或格式不对时为空表
      */
     private Map<String, String> fetchOptionalNotes(String manifestUrl) {
         try {
@@ -691,7 +692,12 @@ final class Sync {
         }
     }
 
-    /** 自选模组的勾选条目 → 状态文件记录 */
+    /**
+     * 自选模组的勾选条目 → 状态文件记录
+     *
+     * @param current 当前清单
+     * @return 路径 → 内容哈希
+     */
     private static Map<String, String> hashesOf(Manifest current) {
         Map<String, String> out = new HashMap<>();
         for (Manifest.FileEntry item : current.files) {
@@ -702,6 +708,12 @@ final class Sync {
         return out;
     }
 
+    /**
+     * 数清单里的自选模组。
+     *
+     * @param current 当前清单
+     * @return 自选模组数量
+     */
     private static int countOptionals(Manifest current) {
         int count = 0;
         for (Manifest.FileEntry item : current.files) {
@@ -715,14 +727,8 @@ final class Sync {
     /**
      * 清单是否没变：先取 `<清单>.sha1`，与本地清单的 SHA1 比
      *
-     * 发布目录没放 .sha1、取不到、或本地还没有清单时都按"变了"处理，照旧整份下载。
-     * 口径与启动器的 server_pack_update 一致。
-     *
-     * - `manifestUrl`: 清单地址
-     *
-     * # 返回值
-     *
-     * 远端指纹与本地清单一致时返回 true
+     * @param manifestUrl 清单地址
+     * @return 远端指纹与本地清单一致时返回 true
      */
     private boolean manifestUnchanged(String manifestUrl) {
         if (manifestUrl == null || manifestUrl.isEmpty()) {
@@ -740,11 +746,16 @@ final class Sync {
         return true;
     }
 
-    /** 取 `<清单>.sha1`，只认纯哈希；取不到或内容不像哈希时返回空串 */
+    /**
+     * 取 `<清单>.sha1`，只认纯哈希；取不到或内容不像哈希时返回空串
+     *
+     * @param manifestUrl 清单地址
+     * @return 40 位 SHA1；取不到或内容不像哈希时为空串
+     */
     private String remoteSha1(String manifestUrl) {
         try {
             String text = new String(downloader.fetchQuiet(manifestUrl + ".sha1"),
-                    java.nio.charset.StandardCharsets.UTF_8).trim();
+                    StandardCharsets.UTF_8).trim();
             int space = text.indexOf(' ');
             if (space > 0) {
                 // 有些工具会写成 "哈希  文件名"
@@ -756,7 +767,7 @@ final class Sync {
         }
     }
 
-    /** 本地清单的 SHA1：状态文件优先，其次基础包目录里的 server.json */
+/** 本地清单的 SHA1：状态文件优先，其次基础包目录里的 server.json */
     private String localManifestSha1() {
         Path state = options.stateDir.resolve("last-manifest.json");
         Path fallback = options.baseDir.resolve("server.json");
@@ -773,15 +784,11 @@ final class Sync {
     }
 
     /**
-     * 用户在进度窗上按了取消：到安全点就停
+     * 清单的包版本，空串按「未标注」显示。
      *
-     * 系统属性由进度窗写：skip 跳过本次更新（退出码 0），end 结束游戏（退出码 1）。
+     * @param manifest 清单
+     * @return 包版本；未标注时返回占位文字
      */
-    private static void checkCancelled() {
-        Cancels.check();
-    }
-
-    /** 清单的包版本，空串按「未标注」显示。 */
     private static String packVersionOf(Manifest manifest) {
         String version = manifest.packVersion == null ? "" : manifest.packVersion.trim();
         return version.isEmpty() ? Text.of(Msg.NOT_SPECIFIED) : version;
@@ -790,11 +797,7 @@ final class Sync {
     /**
      * 本地留存的上一份清单：状态目录里的副本优先，其次基础包里的 server.json
      *
-     * 指纹命中时它和远端字节相同，可以直接当远端清单用。
-     *
-     * # 返回值
-     *
-     * 解析出的旧清单；两份都读不出来时返回 null
+     * @return 解析出的旧清单；两份都读不出来时返回 null
      */
     private Manifest loadLocalManifest() {
         Path state = options.stateDir.resolve("last-manifest.json");
@@ -816,14 +819,10 @@ final class Sync {
     }
 
     /**
-     * 取清单同目录下的同步规则旁文件。
+     * 取清单旁的同步规则；404 按空规则处理，读不到时本轮不执行删除。
      *
-     * 读到且能解析：按规则执行。其余任何情况（404、超时、5xx、返回网页、JSON 坏）
-     * 都按「规则不可用」处理：不阻断同步，但本轮不执行任何文件删除，
-     * 避免在无法确认屏蔽范围时误删玩家文件。
-     *
-     * 归档解压不受这条门禁约束：`Over=true` 是「整包替换目录」的语义，
-     * 与逐文件删除无关，见 {@link #clearArchiveDirectory}。
+     * @param manifestUrl 清单地址
+     * @return 同步规则；读不到时为空规则
      */
     private SyncRules fetchSyncRules(String manifestUrl) {
         try {
@@ -848,10 +847,15 @@ final class Sync {
         }
     }
 
-    /** 旁文件不存在：HTTP 404 或本地文件缺失，按空规则处理；其余错误仍按不可用处理 */
+    /**
+     * 旁文件不存在：HTTP 404 或本地文件缺失，按空规则处理；其余错误仍按不可用处理
+     *
+     * @param error 异常
+     * @return 404 或本地文件缺失时返回 true
+     */
     private static boolean isMissingSidecar(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-            if (cause instanceof java.io.FileNotFoundException) {
+            if (cause instanceof FileNotFoundException) {
                 return true;
             }
             String message = cause.getMessage();
@@ -862,6 +866,12 @@ final class Sync {
         return false;
     }
 
+    /**
+     * 检查清单路径是否越界。
+     *
+     * @param manifest 清单
+     * @throws IOException 路径越界时
+     */
     private void validate(Manifest manifest) throws IOException {
         for (Manifest.FileEntry item : manifest.files) {
             Fs.resolveSafe(options.gameDir, item.path);
@@ -882,7 +892,7 @@ final class Sync {
         if (!rulesAvailable) {
             return;
         }
-        Set<String> live = new java.util.HashSet<>();
+        Set<String> live = new HashSet<>();
         for (Manifest.FileEntry item : current.files) {
             live.add(Fs.pathKey(item.path));
         }
@@ -902,7 +912,7 @@ final class Sync {
         int liveHit = 0;
         int ignoreHit = 0;
         int archiveHit = 0;
-        Set<String> queued = new java.util.HashSet<>();
+        Set<String> queued = new HashSet<>();
         for (String path : rules.removed) {
             String key = Fs.pathKey(path);
             if (key.isEmpty()) {
@@ -954,7 +964,7 @@ final class Sync {
         }
         // 自选模组的旧路径留到弹窗确认后再清：自动弹窗是异步的，
         // 这里执行时玩家可能还没勾选/取消。
-        Set<String> deferredOptional = new java.util.HashSet<>();
+        Set<String> deferredOptional = new HashSet<>();
         for (Manifest.FileEntry item : current.files) {
             if (item.optional) {
                 deferredOptional.add(item.identity());
@@ -1003,7 +1013,13 @@ final class Sync {
         dirs.sort(Comparator.comparingInt((String dir) -> -depth(dir)));
     }
 
-    /** 路径是否落在任一归档解压目录内（含目录本身） */
+    /**
+     * 路径是否落在任一归档解压目录内（含目录本身）
+     *
+     * @param key 规范化路径键
+     * @param archiveDirs 归档解压目录
+     * @return 落在任一目录内时返回 true
+     */
     private static boolean insideArchive(String key, List<String> archiveDirs) {
         for (String dir : archiveDirs) {
             if (key.equals(dir) || Fs.under(key, dir)) {
@@ -1016,8 +1032,8 @@ final class Sync {
     /**
      * 空压缩包删除目录是否执行。
      *
-     * 旁文件不可用时一律不删；存在屏蔽规则时整目录删除无法保证「屏蔽项不动」，
-     * 按约定跳过——需要屏蔽的实例通常也不使用「空包删除目录」这一形态。
+     * @param dir 归档目标目录
+     * @return 允许删除时返回 true
      */
     private boolean canRemoveDirectory(String dir) {
         if (!rulesAvailable) {
@@ -1033,7 +1049,9 @@ final class Sync {
 
     /**
      * `Over=true` 归档解压前清理旧目录：屏蔽规则命中的文件保留，其余删除。
-     * 旁文件不可用时不清空，只覆盖同名文件，避免误删无法确认的路径。
+     *
+     * @param dir 清单里的目录
+     * @param target 本地目录
      */
     private void clearArchiveDirectory(String dir, Path target) throws IOException {
         // 归档是「整包替换目录」的语义，不属于逐文件删除：这里始终按旧行为清空。
@@ -1048,7 +1066,12 @@ final class Sync {
         }
     }
 
-    /** 删除列表只接受精确文件相对路径；目录、通配与越界写法一律拒绝 */
+    /**
+     * 删除列表只接受精确文件相对路径；目录、通配与越界写法一律拒绝
+     *
+     * @param path 清单相对路径
+     * @return 本地路径；不安全时返回 null
+     */
     private Path safeRemovalTarget(String path) {
         String value = path == null ? "" : path.trim();
         if (value.isEmpty() || value.endsWith("/") || value.endsWith("\\")
@@ -1064,6 +1087,13 @@ final class Sync {
         }
     }
 
+    /**
+     * 执行删除计划。
+     *
+     * @param files 待删文件
+     * @param dirs 待删目录
+     * @throws IOException 删除失败时
+     */
     private void applyRemovals(Set<String> files, List<String> dirs) throws IOException {
         if (!rulesAvailable) {
             return;
@@ -1096,11 +1126,8 @@ final class Sync {
     /**
      * 算出要下载的文件与各自落盘位置。
      *
-     * 禁用中的文件也算装好：按内容比对，别把玩家停用的模组又装回启用；
-     * 自选模组只有勾选了才下载，没勾就跳过，本地旧文件原样保留。
-     *
-     * - `current`: 远程清单
-     * - `selfJar`: 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
+     * @param current 远程清单
+     * @param selfJar 运行中的原始更新器 jar 对游戏目录的相对路径；空串表示不跳过
      */
     private List<PlannedFile> changedFiles(Manifest current, String selfJar)
             throws IOException {
@@ -1141,7 +1168,12 @@ final class Sync {
         return out;
     }
 
-    /** 文件名是不是禁用状态（.disabled 或旧版 .disable） */
+    /**
+     * 文件名是不是禁用状态（.disabled 或旧版 .disable）
+     *
+     * @param file 本地文件
+     * @return 带 .disabled / .disable 后缀时返回 true
+     */
     private static boolean isDisabled(Path file) {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(DISABLED_SUFFIX) || name.endsWith(LEGACY_DISABLE_SUFFIX);
@@ -1150,8 +1182,8 @@ final class Sync {
     /**
      * 本地已有的文件：原始名，或追加了 .disabled / .disable 后缀的禁用版。
      *
-     * 模组、资源包被禁用后文件名会变，按原始路径判断存在性会把「已经装好但停用」当成没装，
-     * 每次同步覆盖一次，玩家停用的东西就又被装回启用了。
+     * @param target 清单目标路径
+     * @return 本地实际文件（含禁用副本）；不存在时返回 null
      */
     private static Path existingVariant(Path target) {
         if (Files.isRegularFile(target)) {
@@ -1166,7 +1198,13 @@ final class Sync {
         return null;
     }
 
-    /** 给文件名追加后缀，如 `mods/a.jar` → `mods/a.jar.disabled` */
+    /**
+     * 给文件名追加后缀，如 `mods/a.jar` → `mods/a.jar.disabled`
+     *
+     * @param target 目标文件
+     * @param suffix 追加的后缀
+     * @return 追加后的路径
+     */
     private static Path withSuffix(Path target, String suffix) {
         return target.resolveSibling(target.getFileName().toString() + suffix);
     }
@@ -1174,8 +1212,9 @@ final class Sync {
     /**
      * 删除文件及它的停用副本；与 MML 的 `delete_with_disabled` 一致。
      *
-     * 旧清单移除某条目后，原名和 `.disabled` / `.disable` 都应该一起消失，
-     * 否则同一个模组会留下一份玩家不会加载的旧版本。
+     * 旧清单移除某条目后，原名和 `.disabled` / `.disable` 都应该一起消失，否则同一个模组会留下一份玩家不会加载的旧版本。
+     *
+     * @param target 目标文件
      */
     private static void deleteWithDisabled(Path target) throws IOException {
         Fs.deleteFile(target);
@@ -1183,7 +1222,12 @@ final class Sync {
         Files.deleteIfExists(withSuffix(target, LEGACY_DISABLE_SUFFIX));
     }
 
-    /** 条目的内容哈希：SHA1 优先，没有时用 SHA256 */
+    /**
+     * 条目的内容哈希：SHA1 优先，没有时用 SHA256
+     *
+     * @param item 清单条目
+     * @return SHA1；没有时用 SHA256
+     */
     private static String contentHash(Manifest.FileEntry item) {
         return item.sha1.isEmpty() ? item.sha256 : item.sha1;
     }
@@ -1191,8 +1235,7 @@ final class Sync {
     /**
      * 运行中的原始更新器 jar 对游戏目录的相对路径
      *
-     * jar 不在游戏目录内、跨盘或找不到时返回空串——相对化会带 .. 或抛异常，
-     * 而清单路径不允许 ..，永远不会与这种值相等。
+     * jar 不在游戏目录内、跨盘或找不到时返回空串——相对化会带 .. 或抛异常，而清单路径不允许 ..，永远不会与这种值相等。
      */
     private String selfJarRelative() {
         Path jar = Updater.originalJarPath();
@@ -1207,21 +1250,21 @@ final class Sync {
         }
     }
 
-    /** 有界面、允许交互时才弹窗；不要求具体窗口类型（从 update/ 包运行时类加载器分裂，instanceof 不可用） */
+/** 有界面、允许交互时才弹窗；不要求具体窗口类型（从 update/ 包运行时类加载器分裂，instanceof 不可用） */
     private boolean canAsk() {
         if (!options.ask || !options.gui || ProgressWindow.guiUnavailable()) {
             return false;
         }
         try {
-            return !java.awt.GraphicsEnvironment.isHeadless();
+            return !GraphicsEnvironment.isHeadless();
         } catch (Throwable e) {
             // 图形环境不可用（安卓启动器里 cacio 尚未接管等）：按无界面继续
             return false;
         }
     }
 
-    /** 进度窗上的「自选模组」按钮：跨类加载器不能按类型接线，按文字在窗口树里定位 */
-    private javax.swing.JButton findOptionalButton() {
+/** 进度窗上的「自选模组」按钮：跨类加载器不能按类型接线，按文字在窗口树里定位 */
+    private JButton findOptionalButton() {
         javax.swing.JFrame frame = ownerFrame();
         if (frame == null) {
             return null;
@@ -1229,14 +1272,21 @@ final class Sync {
         return findButtonByText(frame.getContentPane(), Text.of(Msg.OPTIONAL_MODS_BUTTON));
     }
 
-    private static javax.swing.JButton findButtonByText(java.awt.Container root, String text) {
-        for (java.awt.Component child : root.getComponents()) {
-            if (child instanceof javax.swing.JButton
-                    && text.equals(((javax.swing.JButton) child).getText())) {
-                return (javax.swing.JButton) child;
+    /**
+     * 按文字在窗口树里找按钮。
+     *
+     * @param root 根容器
+     * @param text 按钮文字
+     * @return 找到的按钮；没有时 null
+     */
+    private static JButton findButtonByText(Container root, String text) {
+        for (Component child : root.getComponents()) {
+            if (child instanceof JButton
+                    && text.equals(((JButton) child).getText())) {
+                return (JButton) child;
             }
-            if (child instanceof java.awt.Container) {
-                javax.swing.JButton found = findButtonByText((java.awt.Container) child, text);
+            if (child instanceof Container) {
+                JButton found = findButtonByText((Container) child, text);
                 if (found != null) {
                     return found;
                 }
@@ -1245,9 +1295,9 @@ final class Sync {
         return null;
     }
 
-    /** 找正在显示的进度窗当弹窗父窗口；没有时返回 null，对话框居屏幕中 */
+/** 找正在显示的进度窗当弹窗父窗口；没有时返回 null，对话框居屏幕中 */
     private static javax.swing.JFrame ownerFrame() {
-        for (java.awt.Window window : java.awt.Window.getWindows()) {
+        for (Window window : Window.getWindows()) {
             if (window instanceof javax.swing.JFrame && window.isShowing()) {
                 return (javax.swing.JFrame) window;
             }
@@ -1255,6 +1305,12 @@ final class Sync {
         return null;
     }
 
+    /**
+     * 找本地已有文件（含禁用副本），路径非法时返回 null。
+     *
+     * @param path 清单相对路径
+     * @return 本地文件；不存在或路径非法时 null
+     */
     private Path existingVariantQuiet(String path) {
         if (path == null || path.isEmpty()) {
             return null;
@@ -1266,7 +1322,11 @@ final class Sync {
         }
     }
 
-    /** --dry-run 时把自选模组的更新 / 跳过计划打出来 */
+    /**
+     * --dry-run 时把自选模组的更新 / 跳过计划打出来
+     *
+     * @param current 当前清单
+     */
     private void printOptionalPlan(Manifest current) {
         int enabled = 0;
         int disabled = 0;
@@ -1290,6 +1350,14 @@ final class Sync {
         }
     }
 
+    /**
+     * 算出每个归档的解压计划。
+     *
+     * @param old 旧清单
+     * @param current 当前清单
+     * @param removedDirs 已删除的目录
+     * @return 归档计划
+     */
     private List<ArchivePlan> archivePlans(Manifest old, Manifest current, List<String> removedDirs) {
         Map<String, Manifest.ArchiveEntry> oldArchives = new HashMap<>();
         if (old != null) {
@@ -1297,13 +1365,13 @@ final class Sync {
                 oldArchives.put(item.file, item);
             }
         }
-        Set<String> skipped = new java.util.HashSet<>();
+        Set<String> skipped = new HashSet<>();
         for (Manifest.ArchiveEntry item : current.archives) {
             if (archiveUnchanged(oldArchives.get(item.file), item)) {
                 skipped.add(item.dir);
             }
         }
-        Set<String> cleared = new java.util.HashSet<>(removedDirs);
+        Set<String> cleared = new HashSet<>(removedDirs);
         for (Manifest.ArchiveEntry item : current.archives) {
             if (!skipped.contains(item.dir) && item.deleteOld) {
                 cleared.add(item.dir);
@@ -1325,6 +1393,13 @@ final class Sync {
         return out;
     }
 
+    /**
+     * 归档是否可直接跳过。
+     *
+     * @param old 旧归档条目
+     * @param current 当前归档条目
+     * @return 哈希一致且目录已存在时 true
+     */
     private boolean archiveUnchanged(Manifest.ArchiveEntry old, Manifest.ArchiveEntry current) {
         if (old == null || !old.dir.equals(current.dir) || old.deleteOld != current.deleteOld) {
             return false;
@@ -1372,6 +1447,12 @@ final class Sync {
         }
     }
 
+    /**
+     * 把清单原文原子写入状态目录。
+     *
+     * @param data 清单原文
+     * @throws IOException 写失败时
+     */
     private void saveState(byte[] data) throws IOException {
         Files.createDirectories(options.stateDir);
         Path target = options.stateDir.resolve("last-manifest.json");
@@ -1379,12 +1460,19 @@ final class Sync {
         Files.write(temp, data);
         try {
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+        } catch (AtomicMoveNotSupportedException e) {
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         }
         Files.deleteIfExists(temp);
     }
 
+    /**
+     * 更新下载进度。
+     *
+     * @param done 已完成数
+     * @param total 总数
+     * @param detail 当前文件
+     */
     private void progress(int done, int total, String detail) {
         if (!options.quiet && total > 0) {
             Log.info("[progress] " + done + "/" + total);
@@ -1394,11 +1482,21 @@ final class Sync {
         ui.step(done, detail);
     }
 
-    /** 字节数的 MB 显示，与日志里的进度格式一致 */
+    /**
+     * 字节数的 MB 显示，与日志里的进度格式一致
+     *
+     * @param bytes 字节数
+     * @return MB 文本
+     */
     private static String mb(long bytes) {
         return String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
     }
 
+    /**
+     * 非静默模式写日志。
+     *
+     * @param message 内容
+     */
     private void info(String message) {
         if (!options.quiet) {
             Log.info(message);
@@ -1410,12 +1508,9 @@ final class Sync {
      *
      * 任一条失败就取消其余任务并抛出第一个错误，避免半套文件继续被解压。
      *
-     * - `tasks`: 待下载条目
-     * - `total`: 条目总数，进度按它报
-     *
-     * # 返回值
-     *
-     * 实际完成的条目数
+     * @param tasks 待下载条目
+     * @param total 条目总数，进度按它报
+     * @return 实际完成的条目数
      */
     private int downloadAll(List<DownloadTask> tasks, int total) throws IOException {
         if (tasks.isEmpty()) {
@@ -1432,7 +1527,7 @@ final class Sync {
         try {
             for (DownloadTask task : tasks) {
                 futures.add(pool.submit(() -> {
-                    checkCancelled();
+                    Cancels.check();
                     String url = task.entry == null
                             ? task.url
                             : downloader.resolveFile(task.entry);
@@ -1462,7 +1557,7 @@ final class Sync {
         } finally {
             pool.shutdownNow();
             try {
-                pool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+                pool.awaitTermination(5, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -1479,7 +1574,7 @@ final class Sync {
         return finished.get();
     }
 
-    /** 需要下载的一个文件：清单条目与落盘位置 */
+/** 需要下载的一个文件：清单条目与落盘位置 */
     private static final class PlannedFile {
         final Manifest.FileEntry item;
         final Path target;
@@ -1490,7 +1585,7 @@ final class Sync {
         }
     }
 
-    /** 一个待下载条目 */
+/** 一个待下载条目 */
     private static final class DownloadTask {
         /// 直接可用的地址；为空时用 `entry` 解析平台地址
         final String url;
@@ -1531,34 +1626,33 @@ final class Sync {
         return out.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
+    /**
+     * 把清单参数转成 URL：本地路径转 file URI。
+     *
+     * @param value 清单地址或本地路径
+     * @return 可下载地址
+     * @throws IOException 路径非法时
+     */
     private static String toUrl(String value) throws IOException {
         String text = value.trim();
         // Windows 盘符路径（D:\x、D:/x）不是 URL：交给下面的 scheme 正则会被当成「D:」协议
-        if (isWindowsPath(text)) {
+        if (Fs.isWindowsPath(text)) {
             return fileUri(text);
         }
-        if (text.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")) {
+        if (Fs.hasScheme(text)) {
             return text;
         }
         return fileUri(text);
     }
 
-    /** 是不是带盘符的 Windows 绝对路径，如 D:\dir\server.json 或 D:/dir/server.json */
-    private static boolean isWindowsPath(String text) {
-        if (text.length() < 3 || text.charAt(1) != ':' || !isAsciiLetter(text.charAt(0))) {
-            return false;
-        }
-        char separator = text.charAt(2);
-        return separator == '\\' || separator == '/';
-    }
-
-    private static boolean isAsciiLetter(char value) {
-        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
-    }
-
-    /** 本地路径转 file URI，相对路径按当前目录解析 */
+    /**
+     * 本地路径转 file URI，相对路径按当前目录解析
+     *
+     * @param path 本地路径
+     * @return file URI
+     */
     private static String fileUri(String path) throws IOException {
-        return java.nio.file.Paths.get(path).toAbsolutePath().normalize().toUri().toString();
+        return Paths.get(path).toAbsolutePath().normalize().toUri().toString();
     }
 
     private static final class ArchivePlan {

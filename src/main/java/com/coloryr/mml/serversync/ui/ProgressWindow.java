@@ -1,4 +1,4 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -15,32 +15,29 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
-import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
 import com.coloryr.mml.serversync.host.Progress;
+import com.coloryr.mml.serversync.util.Cancels;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
 
 /**
  * 同步进度窗口。
  *
  * 同步经常跑在游戏进程的 premain 里：窗口要在游戏启动前出现、同步一结束就消失。
- * 除了画阶段与步骤，还带一个「取消更新」：点下去先暂停同步，再问一句继续更新、
- * 跳过本次更新还是结束游戏；真正的停止由主流程在安全点检查系统属性后执行。
- *
- * 所有更新方法都可以从任意线程调用，内部统一排到 Swing 事件线程。
  */
-final class ProgressWindow implements Progress {
+public final class ProgressWindow implements Progress {
     /** 窗口标题 */
     private static final String TITLE = Text.of(Msg.MML_SERVER_INSTANCE_SYNC);
 
-    /** 取消状态写在系统属性里，主流程按它决定停不停；值：skip / end */
-    static final String CANCEL_KEY = "mml.serverSync.cancel";
     /** GUI 初始化失败过一次的标记：用系统属性，跨类加载器也能读到 */
-    static final String GUI_FAILED_KEY = "mml.serverSync.guiFailed";
+    public static final String GUI_FAILED_KEY = "mml.serverSync.guiFailed";
 
     /** 之前建窗失败过（例如没有显示服务器）：后续别再尝试弹窗 */
-    static boolean guiUnavailable() {
+    public static boolean guiUnavailable() {
         return "true".equalsIgnoreCase(System.getProperty(GUI_FAILED_KEY, ""));
     }
 
@@ -60,6 +57,11 @@ final class ProgressWindow implements Progress {
     /** 结束后窗口停留的时间，单位毫秒；0 表示立刻关掉 */
     private final int lingerMillis;
 
+    /**
+     * 创建并显示进度窗。
+     *
+     * @param lingerMillis 结束后停留时间（毫秒）
+     */
     private ProgressWindow(int lingerMillis) {
         this.lingerMillis = lingerMillis;
         try {
@@ -132,14 +134,11 @@ final class ProgressWindow implements Progress {
     /**
      * 打开进度窗口
      *
-     * - `enabled`: 为假或当前环境没有图形界面时返回 {@link Progress#NONE}
-     * - `lingerMillis`: 结束后窗口停留多久再关闭；游戏模式下传 0，别拖慢启动
-     *
-     * # 返回值
-     *
-     * 窗口实例；没有窗口时是空实现
+     * @param enabled 为假或当前环境没有图形界面时返回 {@link Progress#NONE}
+     * @param lingerMillis 结束后窗口停留多久再关闭；游戏模式下传 0，别拖慢启动
+     * @return 窗口实例；没有窗口时是空实现
      */
-    static Progress open(boolean enabled, int lingerMillis) {
+    public static Progress open(boolean enabled, int lingerMillis) {
         if (!enabled || guiUnavailable()) {
             return Progress.NONE;
         }
@@ -154,52 +153,69 @@ final class ProgressWindow implements Progress {
             // 没有可用的图形环境（X11 初始化失败、cacio 未就绪等）：记住，之后别再试。
             // 这里只写控制台：Log 要到 Runner 里才打开。
             System.setProperty(GUI_FAILED_KEY, "true");
-            String message = e.getMessage();
-            System.out.println(Log.PREFIX + Text.of(Msg.GUI_UNAVAILABLE_HEADLESS,
-                    message == null || message.trim().isEmpty()
-                            ? e.getClass().getSimpleName() : message));
+            System.out.println(Log.PREFIX + Text.of(Msg.GUI_UNAVAILABLE_HEADLESS, Log.describe(e)));
             return Progress.NONE;
         }
     }
 
     /**
-     * 窗口本体，给模态弹窗当父窗口
+     * 窗口本体，给模态弹窗当父窗口。
      *
-     * # 返回值
-     *
-     * 没有窗口时返回 null
+     * @return 窗口；没有时 null
      */
-    JFrame frame() {
+    public JFrame frame() {
         return frame;
     }
 
-    /** 是否已经走到过 finish；引导方据此判断还要不要兜底关窗 */
-    boolean finished() {
+    /**
+     * 是否已经走到过 finish。
+     *
+     * @return 已结束时 true
+     */
+    public boolean finished() {
         return finished.get();
     }
 
-    /** 直接关窗，不改文案：--help 与参数错误这类没有结果的路径用 */
-    void close() {
+    /**
+     * 直接关窗，不改文案：--help 与参数错误这类路径用。
+     */
+    public void close() {
+        ensureDisposed();
+    }
+
+    /**
+     * 确保窗口已关闭并标记结束。
+     */
+    public void ensureDisposed() {
         finished.set(true);
         dispose();
     }
 
-    /** 确保窗口已关闭并标记结束；已经关掉时再调一次没有副作用 */
-    void ensureDisposed() {
-        finished.set(true);
-        dispose();
-    }
-
+    /**
+     * 更新窗口顶部说明。
+     *
+     * @param text 说明文字
+     */
     @Override
     public void title(String text) {
         update(() -> titleLabel.setText(text == null || text.isEmpty() ? Text.of(Msg.SYNCING_SERVER_INSTANCE) : text));
     }
 
+    /**
+     * 更新当前阶段。
+     *
+     * @param text 阶段文字
+     */
     @Override
     public void stage(String text) {
         update(() -> stageLabel.setText(text == null ? "" : text));
     }
 
+    /**
+     * 设置总步骤数。
+     *
+     * @param total 总数；小于等于 0 时进度条转为不确定状态
+     */
     @Override
     public void total(int total) {
         update(() -> {
@@ -216,6 +232,12 @@ final class ProgressWindow implements Progress {
         });
     }
 
+    /**
+     * 更新进度与当前文件。
+     *
+     * @param done 已完成数
+     * @param detail 当前文件
+     */
     @Override
     public void step(int done, String detail) {
         update(() -> {
@@ -229,6 +251,12 @@ final class ProgressWindow implements Progress {
         });
     }
 
+    /**
+     * 结束并关闭窗口。
+     *
+     * @param ok 是否成功
+     * @param message 结果说明
+     */
     @Override
     public void finish(boolean ok, String message) {
         if (finished.getAndSet(true)) {
@@ -247,7 +275,8 @@ final class ProgressWindow implements Progress {
             }
             bar.setString(cancelling ? Text.of(Msg.CANCELLED)
                     : ok ? Text.of(Msg.DONE) : Text.of(Msg.FAILED));
-            stageLabel.setText(message == null || message.isEmpty() ? (ok ? Text.of(Msg.SYNC_COMPLETE) : Text.of(Msg.SYNC_FAILED)) : message);
+            stageLabel.setText(message == null || message.isEmpty()
+                    ? (ok ? Text.of(Msg.SYNC_COMPLETE) : Text.of(Msg.SYNC_FAILED)) : message);
             if (!ok && !cancelling) {
                 detailLabel.setForeground(new Color(0xB0, 0x30, 0x30));
             }
@@ -270,7 +299,7 @@ final class ProgressWindow implements Progress {
         }
     }
 
-    /** 用户点了取消或关窗：先暂停，再问一句 */
+/** 用户点了取消或关窗：先暂停，再问一句 */
     private void requestCancel() {
         if (finished.get() || cancelRequested) {
             return;
@@ -291,7 +320,7 @@ final class ProgressWindow implements Progress {
         optionalButton.setEnabled(false);
         stageLabel.setText(Text.of(Msg.CANCELLING));
         // 先写取消状态再解除暂停：暂停中的线程醒来立刻就能看到
-        System.setProperty(CANCEL_KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
+        System.setProperty(Cancels.KEY, choice == CancelPrompt.Choice.SKIP ? "skip" : "end");
         Cancels.resume();
         // 后台线程会在下一个数据块看到取消并停下；给它 2 秒自行收尾，超时就不等了，直接关窗
         Thread closer = new Thread(() -> {
@@ -315,7 +344,11 @@ final class ProgressWindow implements Progress {
         }
     }
 
-    /** 更新界面；已结束、已取消或窗口已关掉时忽略，进度条不会继续往前爬 */
+    /**
+     * 在界面线程更新；已结束或已取消时忽略。
+     *
+     * @param action 更新动作
+     */
     private void update(Runnable action) {
         if (finished.get() || cancelling) {
             return;

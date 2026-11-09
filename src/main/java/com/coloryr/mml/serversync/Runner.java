@@ -1,19 +1,31 @@
 package com.coloryr.mml.serversync;
 
+import java.awt.Component;
+import java.awt.GraphicsEnvironment;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
 import com.coloryr.mml.serversync.host.Progress;
+import com.coloryr.mml.serversync.sync.Options;
+import com.coloryr.mml.serversync.sync.Sync;
+import com.coloryr.mml.serversync.ui.FailurePrompt;
+import com.coloryr.mml.serversync.ui.ProgressWindow;
+import com.coloryr.mml.serversync.ui.UiScale;
+import com.coloryr.mml.serversync.util.CancelledException;
+import com.coloryr.mml.serversync.util.Cancels;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.SyncAbortException;
+import com.coloryr.mml.serversync.util.Text;
 
 /**
  * 一次命令行同步的完整流程。
  *
- * 自更新会把 update 目录里的新 jar 用独立类加载器装进来，再反射调用 {@link #run}：
- * 这个类的全名与方法签名要跨版本保持不变，每个版本的 jar 里都带一份。
- * 它只做同步、不查更新、也绝不调用 System.exit；进度窗口在宿主没给的时候自己建，
- * 否则从更新包运行时界面会一直停在基包那一版的布局。
+ * 类名与 {@link #run} 签名跨版本保持稳定：自更新会反射调用更新包里的这一份。
  */
 public final class Runner {
     private Runner() {}
@@ -21,12 +33,9 @@ public final class Runner {
     /**
      * 按命令行参数跑一次同步
      *
-     * - `args`: 命令行参数
-     * - `progress`: 进度窗口；没有窗口时传 null 或 {@link Progress#NONE}
-     *
-     * # 返回值
-     *
-     * 进程退出码：0 成功或跳过，1 同步失败，2 参数错误
+     * @param args 命令行参数
+     * @param progress 进度窗口；没有窗口时传 null 或 {@link Progress#NONE}
+     * @return 进程退出码：0 成功或跳过，1 同步失败，2 参数错误
      */
     public static int run(String[] args, Progress progress) {
         Progress ui = progress == null ? Progress.NONE : progress;
@@ -130,32 +139,27 @@ public final class Runner {
     /**
      * 同步失败后问玩家怎么办
      *
-     * 只有「图形界面可用 + 显式开启 + IO 失败」才弹窗：网络断了、服务器繁忙、下载中断
-     * 都属于 IO 失败。非 IO 失败一律丢回上层按失败收尾；弹不出窗时带 --lenient 就
-     * 返回 {@code null} 表示静默跳过，否则同样丢回上层。
+     * 只有「图形界面可用 + 显式开启 + IO 失败」才弹窗：网络断了、服务器繁忙、下载中断都属于 IO 失败。
      *
-     * - `options`: 本次选项
-     * - `ui`: 进度窗口，弹窗拿它当父窗口
-     * - `cause`: 失败原因
-     *
-     * # 返回值
-     *
-     * 玩家的选择，见 {@link FailurePrompt.Choice}；{@code null} 表示自动跳过本次更新
+     * @param options 本次选项
+     * @param ui 进度窗口，弹窗拿它当父窗口
+     * @param cause 失败原因
+     * @return 玩家的选择，见 {@link FailurePrompt.Choice}；{@code null} 表示自动跳过本次更新
      */
     private static FailurePrompt.Choice askAfterFailure(Options options, Progress ui, Exception cause)
             throws Exception {
-        if (!(cause instanceof java.io.IOException)) {
+        if (!(cause instanceof IOException)) {
             throw cause;
         }
         boolean canPrompt = options.gui && options.askOnFailure
-                && !java.awt.GraphicsEnvironment.isHeadless() && !ProgressWindow.guiUnavailable();
+                && !GraphicsEnvironment.isHeadless() && !ProgressWindow.guiUnavailable();
         if (!canPrompt) {
             if (options.lenient) {
                 return null;
             }
             throw cause;
         }
-        java.awt.Component parent = ui instanceof ProgressWindow
+        Component parent = ui instanceof ProgressWindow
                 ? ((ProgressWindow) ui).frame() : null;
         return FailurePrompt.ask(parent, cause.getMessage());
     }
@@ -163,22 +167,18 @@ public final class Runner {
     /**
      * 取本次运行真正使用的进度窗口：宿主传来的不是本包这一份时，换成自己建的。
      *
-     * 从 update/ 包运行时窗口由宿主（基包）创建，而基包不随更新包变化，界面布局会
-     * 一直停在基包那一版；同步逻辑在更新包里，界面也必须由最新的代码画。
+     * 从 update/ 包运行时窗口由宿主（基包）创建，而基包不随更新包变化，界面布局会一直停在基包那一版；同步逻辑在更新包里，界面也必须由最新的代码画。
      *
-     * - `given`: 宿主传来的窗口，可能是空实现
-     * - `options`: 本次运行的选项，用来判断要不要窗口
-     *
-     * # 返回值
-     *
-     * 实际使用的窗口；不需要窗口时原样返回 `given`
+     * @param given 宿主传来的窗口，可能是空实现
+     * @param options 本次运行的选项，用来判断要不要窗口
+     * @return 实际使用的窗口；不需要窗口时原样返回 `given`
      */
     private static Progress adopt(Progress given, Options options) {
         Progress current = given == null ? Progress.NONE : given;
         if (current instanceof ProgressWindow) {
             return current;
         }
-        if (!options.gui || java.awt.GraphicsEnvironment.isHeadless()) {
+        if (!options.gui || GraphicsEnvironment.isHeadless()) {
             return current;
         }
         Progress own = ProgressWindow.open(true, lingerMillis());
@@ -196,7 +196,7 @@ public final class Runner {
         return own;
     }
 
-    /** 窗口结束后停留多久：宿主经系统属性传过来，没传时按游戏模式处理（不停留） */
+/** 窗口结束后停留多久：宿主经系统属性传过来，没传时按游戏模式处理（不停留） */
     private static int lingerMillis() {
         String value = System.getProperty(Bootstrap.LINGER_KEY, "").trim();
         if (value.isEmpty()) {
@@ -246,8 +246,10 @@ public final class Runner {
                 options.update = false;
             } else if ("--update".equals(arg)) {
                 options.update = true;
+            } else if (arg.startsWith("--update-url=")) {
+                options.updateUrl = arg.substring("--update-url=".length());
             } else if (arg.startsWith("--update-index=")) {
-                options.updateIndex = arg.substring("--update-index=".length());
+                options.updateUrl = arg.substring("--update-index=".length());
             } else if (arg.startsWith("--skip=")) {
                 addSkips(options.skip, arg.substring("--skip=".length()));
             } else if (arg.startsWith("--skip-file=")) {
@@ -280,14 +282,14 @@ public final class Runner {
                 options.logFile = Paths.get(value(args, ++i, arg));
             } else if ("--threads".equals(arg)) {
                 options.threads = threadsOf(value(args, ++i, arg));
+            } else if ("--update-url".equals(arg) || "-u".equals(arg)) {
+                options.updateUrl = value(args, ++i, arg);
             } else if ("--update-index".equals(arg)) {
-                options.updateIndex = value(args, ++i, arg);
+                options.updateUrl = value(args, ++i, arg);
             } else if ("--skip".equals(arg)) {
                 addSkips(options.skip, value(args, ++i, arg));
             } else if ("--skip-file".equals(arg)) {
                 options.skipFile = Paths.get(value(args, ++i, arg));
-            } else if (!arg.startsWith("-")) {
-                throw new UsageException(Text.of(Msg.UNKNOWN_ARGUMENT) + arg);
             } else {
                 throw new UsageException(Text.of(Msg.UNKNOWN_ARGUMENT) + arg);
             }
@@ -302,7 +304,7 @@ public final class Runner {
         return options;
     }
 
-    /** 解析逗号分隔的 `--skip` 值，路径统一成 `/` 分隔 */
+/** 解析逗号分隔的 `--skip` 值，路径统一成 `/` 分隔 */
     private static void addSkips(List<String> target, String value) {
         for (String part : (value == null ? "" : value).split(",")) {
             String path = normalizePath(part);
@@ -319,7 +321,7 @@ public final class Runner {
     /**
      * 读 `--skip-file`：UTF-8，一行一个路径，空行与 `#` 开头的行忽略
      *
-     * - `options`: 已经把 skipFile 填好的选项
+     * @param options 已经把 skipFile 填好的选项
      */
     private static void readSkipFile(Options options) throws UsageException {
         if (options.skipFile == null) {
@@ -327,19 +329,19 @@ public final class Runner {
         }
         Path file = options.skipFile.toAbsolutePath().normalize();
         try {
-            for (String line : Files.readAllLines(file, java.nio.charset.StandardCharsets.UTF_8)) {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String path = normalizePath(line);
                 if (path.isEmpty() || path.startsWith("#")) {
                     continue;
                 }
                 options.skip.add(path);
             }
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new UsageException(Text.of(Msg.FAILED_TO_READ_SKIP_FILE) + e.getMessage());
         }
     }
 
-    /** 解析线程数，限制在 1-64 */
+/** 解析线程数，限制在 1-64 */
     private static int threadsOf(String value) throws UsageException {
         try {
             return Math.max(1, Math.min(64, Integer.parseInt(value.trim())));
@@ -383,6 +385,7 @@ public final class Runner {
         System.out.println(Text.of(Msg.ASK_ON_FAILURE_PROMPT_FOR_A_CHOICE_WHEN_THE_UPDATE_FAILS));
         System.out.println(Text.of(Msg.NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL));
         System.out.println(Text.of(Msg.NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES));
+        System.out.println(Text.of(Msg.UPDATE_URL_SELF_UPDATE_ADDRESS_INDEX_JSON_OR_A_DIRECTORY_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON));
         System.out.println(Text.of(Msg.UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON));
         System.out.println(Text.of(Msg.QUIET_LESS_OUTPUT));
         System.out.println(Text.of(Msg.VERSION_SHOW_VERSION));
@@ -392,6 +395,7 @@ public final class Runner {
         System.out.println("  java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft");
         System.out.println("  java -jar mml-server-sync.jar -m ./server.json -g ./instance/.minecraft --base-dir ./instance");
         System.out.println("  java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft --skip=mods/b.jar --skip=mods/c.jar");
+        System.out.println("  java -jar mml-server-sync.jar -m https://example.com/server.json -g .minecraft --update-url https://example.com/mml-server-sync/");
         System.out.println();
         System.out.println(Text.of(Msg.NOTES));
         System.out.println(Text.of(Msg.SKIPPED_WHEN_PACKVERSION_IS_UNCHANGED_FORCE_OVERRIDES));

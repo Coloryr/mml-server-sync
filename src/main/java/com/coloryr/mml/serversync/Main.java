@@ -2,18 +2,20 @@ package com.coloryr.mml.serversync;
 
 import java.nio.file.Path;
 
-/**
- * 独立服务器实例更新器入口。
- *
- * 入口只负责引导：查更新、挑要用的 jar，真正的同步在 {@link Runner} 里，
- * 可能来自 update 目录中的新版本。
- */
+import com.coloryr.mml.serversync.update.Updater;
+
+/** 独立服务器实例更新器入口。 */
 public final class Main {
     /** 工具版本号，启动日志、--version 与自更新比较都用它 */
-    static final String VERSION = "1.8.0";
+    public static final String VERSION = "1.9.0";
 
     private Main() {}
 
+    /**
+     * 程序入口。
+     *
+     * @param args 命令行参数
+     */
     public static void main(String[] args) {
         // -jar 模式的原始 jar 就是主类所在 jar；先记下，同步计划据此跳过自身条目
         Updater.captureSelfJar();
@@ -27,11 +29,8 @@ public final class Main {
     /**
      * 默认基础包目录
      *
-     * - `gameDir`: 游戏目录
-     *
-     * # 返回值
-     *
-     * 游戏目录是 .minecraft 时返回它的父目录，否则就是游戏目录本身
+     * @param gameDir 游戏目录
+     * @return 游戏目录是 .minecraft 时返回它的父目录，否则就是游戏目录本身
      */
     static Path defaultBaseDir(Path gameDir) {
         Path name = gameDir.getFileName();

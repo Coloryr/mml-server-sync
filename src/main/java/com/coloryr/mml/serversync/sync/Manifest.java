@@ -1,20 +1,26 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.sync;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import com.coloryr.mml.serversync.util.Json;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
 /** MML 服务器清单 server.json。 */
-final class Manifest {
-    final String name;
-    final String version;
-    final String packVersion;
-    final List<FileEntry> files;
-    final List<ArchiveEntry> archives;
-    final BaseEntry base;
+public final class Manifest {
+    public final String name;
+    public final String version;
+    public final String packVersion;
+    public final List<FileEntry> files;
+    public final List<ArchiveEntry> archives;
+    public final BaseEntry base;
 
     private Manifest(String name, String version, String packVersion, List<FileEntry> files,
                      List<ArchiveEntry> archives, BaseEntry base) {
@@ -26,7 +32,14 @@ final class Manifest {
         this.base = base;
     }
 
-    static Manifest parse(byte[] data) throws IOException {
+    /**
+     * 解析 server.json。
+     *
+     * @param data 清单字节
+     * @return 解析出的清单
+     * @throws IOException JSON 非法或缺少必需字段时
+     */
+    public static Manifest parse(byte[] data) throws IOException {
         Map<String, Object> root = Json.map(Json.parse(data));
         if (root == null) {
             throw new IOException(Text.of(Msg.THE_MANIFEST_ROOT_IS_NOT_A_JSON_OBJECT));
@@ -82,8 +95,12 @@ final class Manifest {
                 Json.string(root, "PackVersion"), files, archives, base);
     }
 
-    /** 把清单里的相对 URL 按清单自身地址解析；MML 生成时通常已是绝对地址。 */
-    void resolveUrls(String manifestUrl) {
+    /**
+     * 把清单里的相对 URL 按清单自身地址解析；MML 生成时通常已是绝对地址。
+     *
+     * @param manifestUrl 清单地址
+     */
+    public void resolveUrls(String manifestUrl) {
         if (manifestUrl == null || manifestUrl.trim().isEmpty()) {
             return;
         }
@@ -98,12 +115,19 @@ final class Manifest {
         }
     }
 
+    /**
+     * 把相对地址按清单地址解析。
+     *
+     * @param base 清单地址
+     * @param url 条目里的地址
+     * @return 绝对地址
+     */
     private static String resolveAgainst(String base, String url) {
         String value = url == null ? "" : url.trim();
         if (value.isEmpty()) {
             return "";
         }
-        if (value.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")) {
+        if (Fs.hasScheme(value)) {
             return value;
         }
         try {
@@ -119,6 +143,12 @@ final class Manifest {
         }
     }
 
+    /**
+     * 按路径段编码相对地址。
+     *
+     * @param path 相对路径
+     * @return 编码后的路径
+     */
     private static String encodePath(String path) {
         String[] parts = path.split("/", -1);
         StringBuilder out = new StringBuilder();
@@ -131,15 +161,21 @@ final class Manifest {
         return out.toString();
     }
 
+    /**
+     * URL 编码一个路径段。
+     *
+     * @param value 路径段
+     * @return 编码后的文本
+     */
     private static String encodeSegment(String value) {
         try {
-            return java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20");
-        } catch (java.io.UnsupportedEncodingException e) {
+            return URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        } catch (UnsupportedEncodingException e) {
             return value;
         }
     }
 
-    static final class FileEntry {
+    public static final class FileEntry {
         final String path;
         final String pid;
         final String fid;
@@ -166,37 +202,13 @@ final class Manifest {
             return pid.isEmpty() ? "path:" + path : "pid:" + pid;
         }
 
-        /**
-         * 两条条目的内容是否一致
-         *
-         * SHA1 优先，没有时退回 SHA256；两边都没有校验值按内容不同处理。
-         *
-         * - `other`: 另一条清单条目
-         *
-         * # 返回值
-         *
-         * 内容一致时返回 true
-         */
-        boolean hasSameContent(FileEntry other) {
-            if (other == null) {
-                return false;
-            }
-            if (!sha1.isEmpty() && !other.sha1.isEmpty()) {
-                return sha1.equalsIgnoreCase(other.sha1);
-            }
-            if (!sha256.isEmpty() && !other.sha256.isEmpty()) {
-                return sha256.equalsIgnoreCase(other.sha256);
-            }
-            return false;
-        }
-
         String fileName() {
             int i = path.lastIndexOf('/');
             return i >= 0 ? path.substring(i + 1) : path;
         }
     }
 
-    static final class ArchiveEntry {
+    public static final class ArchiveEntry {
         final String file;
         final String dir;
         final boolean deleteOld;
@@ -215,7 +227,7 @@ final class Manifest {
         }
     }
 
-    static final class BaseEntry {
+    public static final class BaseEntry {
         final String file;
         String url;
         final String sha1;
@@ -229,6 +241,12 @@ final class Manifest {
         }
     }
 
+    /**
+     * null 安全去空白。
+     *
+     * @param value 原值
+     * @return 去空白后的文本；null 时为空串
+     */
     private static String trim(String value) {
         return value == null ? "" : value.trim();
     }

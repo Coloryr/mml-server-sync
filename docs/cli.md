@@ -45,7 +45,8 @@ java -jar mml-server-sync.jar -m ./server.json -g ./Instance/game --base-dir ./I
 | `--ui-scale` | 界面缩放倍数，仅支持 `--ui-scale=2.5` 写法；桌面默认 1.0，移动启动器自动放大 |
 | `--no-ask` | 不弹自选模组勾选窗（无记录时跳过，不下载） |
 | `--no-update` / `--update` | 关 / 开自更新（默认开） |
-| `--update-index` | 自更新索引地址；默认项目主页的 `index.json` |
+| `--update-url, -u` | 自更新地址：`index.json` 或它所在的目录（自动补 `index.json`）；也认本地路径；默认项目主页的 `index.json` |
+| `--update-index` | 旧写法，等同 `--update-url` |
 | `--curseforge-api-key` | CurseForge API Key；缺省读环境变量 `CURSEFORGE_API_KEY` |
 | `--version` | 显示版本 |
 | `--help, -h` | 显示帮助 |
@@ -95,6 +96,19 @@ java -jar mml-server-sync.jar -m "https://example.com/server.json" -g ".minecraf
 
 给了 `--skip` 时自动弹窗不再出现，但进度窗的「自选模组」按钮仍然可用。
 未列出的自选模组按状态文件里的选择处理。详见 [optional-mods.md](optional-mods.md)。
+
+## 换自更新地址
+
+更新器自身也从网上取新版本。发布方把 `index.json` 放在别处时，用 `--update-url` 指过去：
+
+```text
+--update-url https://example.com/mml-server-sync/          # 目录，自动补 index.json
+--update-url https://example.com/mml-server-sync/index.json
+--update-url D:\pack\index.json                            # 本地文件，方便离线测试
+```
+
+`--update-index` 是同一参数的旧写法。Agent 模式改用
+`-Dmml.serverSync.updateUrl=...` 或环境变量 `MML_SERVER_SYNC_UPDATE_URL`。
 
 ## 先看计划再动手
 

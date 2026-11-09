@@ -1,15 +1,12 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.update;
 
 import java.net.URL;
 import java.net.URLClassLoader;
 
 /**
- * 更新包的类加载器：启动器自己的类优先从更新包读，host 包一律交给父加载器。
- *
- * host 包（{@link com.coloryr.mml.serversync.host.Progress}）是宿主与更新包之间唯一共享的
- * 类型，必须解析到同一个 Class 实例，否则反射调用会因为参数类型对不上而失败。
+ * 更新包类加载器：更新包内的类优先，host 包交给父加载器。
  */
-final class UpdateClassLoader extends URLClassLoader {
+public final class UpdateClassLoader extends URLClassLoader {
     /** 只由宿主提供、更新包里的同名副本不用的包前缀 */
     private static final String HOST_PACKAGE = "com.coloryr.mml.serversync.host.";
     /** 要从更新包加载的包前缀 */
@@ -19,7 +16,7 @@ final class UpdateClassLoader extends URLClassLoader {
         registerAsParallelCapable();
     }
 
-    UpdateClassLoader(URL jar) {
+    public UpdateClassLoader(URL jar) {
         super(new URL[]{jar}, UpdateClassLoader.class.getClassLoader());
     }
 

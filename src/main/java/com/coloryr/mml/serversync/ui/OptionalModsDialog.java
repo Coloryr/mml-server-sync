@@ -1,11 +1,11 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.Frame;
+import java.awt.Insets;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -32,20 +32,12 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableColumnModel;
 
-/**
- * 自选模组勾选窗：列出全部自选模组，勾选决定这次是否下载/更新。
- *
- * 用表格而不是一列复选框：条目多时要有表头与滚动条，名称 / 介绍 / 状态各占一列才对得齐。
- * 点整行任意位置都能翻勾选状态，空格也可以。关窗、Esc 与「确定」同义：
- * 返回当前勾选结果，没有取消的概念——不改动就按打开时的勾选继续。
- *
- * 底部另有「记住我的选择，以后不再显示」：勾上并确认后由调用方写标记文件，
- * 之后只在自选模组有新增或内容变化时才自动弹窗。初始状态由调用方给出——自动弹窗
- * 在玩家尚未记住时不替他做决定，管理窗则反映当前是否已记住。
- *
- * 只在交互模式下弹：--no-gui、headless 与给了 --skip 的脚本自动弹的这扇窗不出现。
- */
-final class OptionalModsDialog {
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
+/** 自选模组勾选窗：列出全部自选模组，勾选决定这次是否下载/更新。 */
+public final class OptionalModsDialog {
     /** 表格行高，单位像素 */
     private static final int ROW_HEIGHT = 30;
     /** 隔行底色，浅到不影响文字 */
@@ -61,20 +53,29 @@ final class OptionalModsDialog {
 
     private OptionalModsDialog() {}
 
-    /** 一行：清单路径、文件名、简介、状态、初始勾选 */
-    static final class Row {
+/** 一行：清单路径、文件名、简介、状态、初始勾选 */
+    public static final class Row {
         /** 清单里的相对路径 */
-        final String path;
+        public final String path;
         /** 文件名 */
-        final String name;
+        public final String name;
         /** 简介文字，发布端没写时为空 */
-        final String desc;
+        public final String desc;
         /** 状态文字：新增 / 需更新 / 已同步，可带本地启用状态后缀 */
-        final String status;
+        public final String status;
         /** 初始是否勾选 */
-        final boolean checked;
+        public final boolean checked;
 
-        Row(String path, String name, String desc, String status, boolean checked) {
+        /**
+         * 一条表格行。
+         *
+         * @param path 清单相对路径
+         * @param name 文件名
+         * @param desc 简介
+         * @param status 状态文字
+         * @param checked 初始是否勾选
+         */
+        public Row(String path, String name, String desc, String status, boolean checked) {
             this.path = path;
             this.name = name;
             this.desc = desc == null ? "" : desc;
@@ -83,14 +84,20 @@ final class OptionalModsDialog {
         }
     }
 
-    /** 弹窗结果：玩家确认的勾选，外加「以后不再显示」 */
-    static final class Result {
+/** 弹窗结果：玩家确认的勾选，外加「以后不再显示」 */
+    public static final class Result {
         /** 路径 → 是否勾选，覆盖全部展示行 */
-        final LinkedHashMap<String, Boolean> selections;
+        public final LinkedHashMap<String, Boolean> selections;
         /** 玩家勾了「记住我的选择，以后不再显示」 */
-        final boolean suppressPrompt;
+        public final boolean suppressPrompt;
 
-        Result(LinkedHashMap<String, Boolean> selections, boolean suppressPrompt) {
+        /**
+         * 弹窗结果。
+         *
+         * @param selections 路径 → 是否勾选
+         * @param suppressPrompt 是否勾选「以后不再显示」
+         */
+        public Result(LinkedHashMap<String, Boolean> selections, boolean suppressPrompt) {
             this.selections = selections;
             this.suppressPrompt = suppressPrompt;
         }
@@ -99,20 +106,13 @@ final class OptionalModsDialog {
     /**
      * 弹出勾选窗并等待玩家确认；必须在事件线程上调用
      *
-     * 调用方自己决定时机：按钮点击直接调，自动弹窗交给后台线程包装。方法阻塞到
-     * 窗口关闭为止，返回**所有展示行**的最终勾选状态——没有取消出口，关窗就是确认。
-     * 调用方只应把结果并进展示过的行，未展示行的选择保持原状。
-     *
-     * - `parent`: 父窗口，可为 null
-     * - `rows`: 要列出的条目
-     * - `header`: 表格上方的说明文字
-     * - `rememberChecked`: 「以后不再显示」的初始勾选状态，由调用方按当前是否已记住给出
-     *
-     * # 返回值
-     *
-     * 全部展示行的勾选状态与「以后不再显示」的勾选状态
+     * @param parent 父窗口，可为 null
+     * @param rows 要列出的条目
+     * @param header 表格上方的说明文字
+     * @param rememberChecked 「以后不再显示」的初始勾选状态，由调用方按当前是否已记住给出
+     * @return 全部展示行的勾选状态与「以后不再显示」的勾选状态
      */
-    static Result askForSelection(Component parent, List<Row> rows, String header,
+    public static Result askForSelection(Component parent, List<Row> rows, String header,
                                   boolean rememberChecked) {
         // 提前解析 Result：更新包的类加载器可能在同步失败后被宿主关闭，
         // 弹窗收尾（或回退）时才加载会 NoClassDefFoundError
@@ -132,7 +132,13 @@ final class OptionalModsDialog {
         return result[0];
     }
 
-    /** 弹窗打不开时的结果：每行都按初始勾选，标记状态不变 */
+    /**
+     * 弹窗打不开时的结果。
+     *
+     * @param rows 展示行
+     * @param rememberChecked 「以后不再显示」的初始状态
+     * @return 每行按初始勾选的结果
+     */
     private static Result fallbackResult(List<Row> rows, boolean rememberChecked) {
         LinkedHashMap<String, Boolean> selections = new LinkedHashMap<>();
         for (Row row : rows) {
@@ -145,7 +151,7 @@ final class OptionalModsDialog {
                                boolean rememberChecked) {
         // 窗口可能由宿主建好外观，这里补一次全局字体（幂等）
         UiScale.apply();
-        final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.OPTIONAL_MODS_BUTTON), true);
+        final JDialog dialog = new JDialog(UiScale.ownerOf(parent), Text.of(Msg.OPTIONAL_MODS_BUTTON), true);
         dialog.setMinimumSize(UiScale.size(720, 380));
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
@@ -298,23 +304,24 @@ final class OptionalModsDialog {
         return new Result(out, never.isSelected());
     }
 
+    /**
+     * 翻转一行的勾选。
+     *
+     * @param model 表格模型
+     * @param row 行号
+     */
     private static void toggle(DefaultTableModel model, int row) {
         model.setValueAt(!Boolean.TRUE.equals(model.getValueAt(row, 0)), row, 0);
     }
 
-    private static Frame ownerOf(Component parent) {
-        if (parent instanceof Frame) {
-            return (Frame) parent;
-        }
-        if (parent != null) {
-            java.awt.Window window = SwingUtilities.getWindowAncestor(parent);
-            if (window instanceof Frame) {
-                return (Frame) window;
-            }
-        }
-        return null;
-    }
-
+    /**
+     * 行底色。
+     *
+     * @param table 表格
+     * @param selected 是否选中
+     * @param row 行号
+     * @return 颜色
+     */
     private static Color rowBackground(JTable table, boolean selected, int row) {
         if (selected) {
             return table.getSelectionBackground();
@@ -322,14 +329,14 @@ final class OptionalModsDialog {
         return row % 2 == 0 ? table.getBackground() : STRIPE;
     }
 
-    /** 勾选列的复选框渲染：居中、无内边距（默认 margin 会左右不对称）、跟着隔行底色 */
+/** 勾选列的复选框渲染：居中、无内边距（默认 margin 会左右不对称）、跟着隔行底色 */
     private static final class CheckRenderer extends DefaultTableCellRenderer {
         private static final long serialVersionUID = 1L;
         private final JCheckBox box = new JCheckBox();
 
         CheckRenderer() {
             box.setHorizontalAlignment(SwingConstants.CENTER);
-            box.setMargin(new java.awt.Insets(0, 0, 0, 0));
+            box.setMargin(new Insets(0, 0, 0, 0));
             box.setBorderPainted(false);
             box.setFocusPainted(false);
             box.setIconTextGap(0);
@@ -345,7 +352,7 @@ final class OptionalModsDialog {
         }
     }
 
-    /** 文字列：留边距，介绍列灰色，状态列按新增 / 需更新上色 */
+/** 文字列：留边距，介绍列灰色，状态列按新增 / 需更新上色 */
     private static final class TextRenderer extends DefaultTableCellRenderer {
         private static final long serialVersionUID = 1L;
 
@@ -363,6 +370,13 @@ final class OptionalModsDialog {
         }
     }
 
+    /**
+     * 按列与文字取前景色。
+     *
+     * @param column 列号
+     * @param value 单元格值
+     * @return 颜色
+     */
     private static Color foregroundOf(int column, Object value) {
         String text = value == null ? "" : value.toString();
         if (column == 2) {

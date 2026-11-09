@@ -1,11 +1,8 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.util;
 
-/**
- * 文案键：每条带中英两份格式串，参数用 %s。
- *
- * 调用处只写键，不写原文，见 {@link Text#of}。
- */
-enum Msg {
+
+/** 文案键：每条带中英两份格式串，参数用 %s。 */
+public enum Msg {
     MML_SKIP_IS_SET_SKIPPING_THE_MML_LAUNCHER_CHECK("MML_SKIP 已设置，跳过 MML 启动器检查", "MML_SKIP is set, skipping the MML launcher check"),
     MML_LAUNCHER_DETECTED_SKIPPING_SERVER_PACK_SYNC("检测到 MML 启动器，跳过服务器包同步", "MML launcher detected, skipping server pack sync"),
     MML_SERVER_SYNC_JAVAAGENT_ARGUMENT_IS_MISSING_THE_MANIFEST_URL("mml-server-sync: -javaagent 参数缺少清单 URL", "mml-server-sync: -javaagent argument is missing the manifest URL"),
@@ -114,7 +111,8 @@ enum Msg {
     NO_GUI_DO_NOT_SHOW_THE_PROGRESS_WINDOW("  --no-gui            不显示同步进度窗口", "  --no-gui            Do not show the progress window"),
     NO_ASK_DO_NOT_ASK_ABOUT_OPTIONAL_MODS_UPDATE_ALL("  --no-ask            不弹可选模组勾选窗，按已记录的选择更新", "  --no-ask            Do not ask about optional mods; follow the recorded choice"),
     NO_UPDATE_DO_NOT_CHECK_FOR_SELF_UPDATES("  --no-update         不检查自更新", "  --no-update         Do not check for self-updates"),
-    UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON("  --update-index      自更新索引地址；默认 https://www.coloryr.com/mml-server-sync/index.json", "  --update-index      Self-update index URL; default https://www.coloryr.com/mml-server-sync/index.json"),
+    UPDATE_URL_SELF_UPDATE_ADDRESS_INDEX_JSON_OR_A_DIRECTORY_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON("  --update-url, -u    自更新地址：index.json 或所在目录（自动补 index.json）；默认 https://www.coloryr.com/mml-server-sync/index.json", "  --update-url, -u    Self-update address: index.json or its directory (index.json is appended); default https://www.coloryr.com/mml-server-sync/index.json"),
+    UPDATE_INDEX_SELF_UPDATE_INDEX_URL_DEFAULT_HTTPS_WWW_COLORYR_COM_MML_SERVER_SYNC_INDEX_JSON("  --update-index      --update-url 的旧写法", "  --update-index      Legacy alias of --update-url"),
     QUIET_LESS_OUTPUT("  --quiet             少输出", "  --quiet             Less output"),
     VERSION_SHOW_VERSION("  --version           显示版本", "  --version           Show version"),
     HELP_H_SHOW_HELP("  --help, -h          显示帮助", "  --help, -h          Show help"),
@@ -185,7 +183,7 @@ enum Msg {
     USING_UPDATE_PACKAGE_VERSION("使用更新包 %s（当前 %s）", "Using update package %s (current %s)"),
     UPDATE_PACKAGE_INVALID("更新包校验不通过，跳过 %s：%s", "Update package failed verification, skipping %s: %s"),
     UPDATE_INDEX_UNAVAILABLE_REASON("更新索引不可用: %s，%s", "Update index unavailable: %s, %s"),
-    UPDATE_INDEX_IS_A_WEB_PAGE_SKIPPING("更新索引返回的是网页而不是 JSON，跳过自更新（检查 --update-index）: %s", "Update index is a web page, not JSON; skipping self-update (check --update-index): %s"),
+    UPDATE_INDEX_IS_A_WEB_PAGE_SKIPPING("更新索引返回的是网页而不是 JSON，跳过自更新（检查 --update-url）: %s", "Update index is a web page, not JSON; skipping self-update (check --update-url): %s"),
     LOCAL_REMOTE_VERSION("本地包版本 %s，远程包版本 %s", "Local pack version %s, remote pack version %s"),
     NO_LOCAL_RECORD_VERSION("本地无同步记录，远程包版本 %s", "No local sync record, remote pack version %s"),
     NO_DELETE_SKIPPED("--no-delete：跳过 %s 个文件、%s 个目录的删除", "--no-delete: skipping %s file(s) and %s directory/directories"),
@@ -274,12 +272,12 @@ enum Msg {
         this.en = en;
     }
 
-    /** 中文格式串 */
+/** 中文格式串 */
     String zh() {
         return zh;
     }
 
-    /** 英文格式串 */
+/** 英文格式串 */
     String en() {
         return en;
     }

@@ -1,4 +1,4 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.update;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -7,34 +7,45 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.CodeSource;
+import java.util.Locale;
 import java.util.Map;
 
-/**
- * 自更新：从 GitHub 上的 index.json 取最新版本，把新 jar 下载到 jar 同目录的 update/ 下。
- *
- * 不覆盖正在运行的 jar —— 那个文件被 JVM 独占，进程活着就换不掉；新版本留在目录里，
- * 下次启动由 {@link Bootstrap} 用独立类加载器装上，见 {@link UpdateClassLoader}。
- *
- * 整个过程不影响同步：任何一步失败只记一行日志。
- */
-final class Updater {
-    /** 默认索引：与更新用的 jar 放在同一个目录下 */
-    static final String DEFAULT_INDEX =
-            "https://www.coloryr.com/mml-server-sync/index.json";
+import com.coloryr.mml.serversync.Main;
+import com.coloryr.mml.serversync.sync.Downloader;
+import com.coloryr.mml.serversync.sync.Fs;
+import com.coloryr.mml.serversync.sync.Verify;
+import com.coloryr.mml.serversync.util.Json;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
 
-    /**
-     * 原始更新器 jar 路径的系统属性键。
-     *
-     * 入口（premain / main）在启动时用类加载源捕获并写入；从 update/ 包运行时
-     * 类加载源指向 update/ 里的副本，而 JVM 独占锁着的、清单条目对应的
-     * 是 -javaagent / -jar 指定的那份原始 jar，两者不能混用。
-     */
-    static final String SELF_JAR_KEY = "mml.serverSync.selfJar";
+/**
+ * 自更新：从 index.json 取新版本，下载到 jar 同目录的 update/。
+ *
+ * 不覆盖运行中的 jar，新版本下次启动由独立类加载器加载。
+ */
+public final class Updater {
+    /** 默认索引：与更新用的 jar 放在同一个目录下 */
+    public static final String DEFAULT_INDEX =
+            "https://www.coloryr.com/mml-server-sync/index.json";
+    /** 索引文件名：给目录地址时自动补上 */
+    private static final String INDEX_FILE = "index.json";
+    /** 自定义更新地址的 JVM 属性 / 环境变量；旧写法仍然认 */
+    public static final String URL_PROPERTY = "mml.serverSync.updateUrl";
+    public static final String LEGACY_URL_PROPERTY = "mml.serverSync.updateIndex";
+    public static final String URL_ENV = "MML_SERVER_SYNC_UPDATE_URL";
+    public static final String LEGACY_URL_ENV = "MML_SERVER_SYNC_INDEX";
+
+    /** 原始 jar 路径的系统属性键；入口启动时按类加载源写入。 */
+    public static final String SELF_JAR_KEY = "mml.serverSync.selfJar";
 
     /** 更新包目录名，放在 jar 同目录下 */
     private static final String UPDATE_DIR = "update";
@@ -50,18 +61,13 @@ final class Updater {
     private Updater() {}
 
     /**
-     * 后台检查一次更新
+     * 后台检查一次更新；没开自更新返回 null。
      *
-     * 守护线程：命令行模式跑完同步后由引导方短暂 join，游戏模式则让它自己跑完。
-     *
-     * - `enabled`: 是否开启自更新
-     * - `index`: 索引地址；空串用 {@link #DEFAULT_INDEX}
-     *
-     * # 返回值
-     *
-     * 后台线程；没有开启自更新时为 null
+     * @param enabled 是否开启自更新
+     * @param index 索引地址；空串用 {@link #DEFAULT_INDEX}
+     * @return 后台线程；没有开启自更新时为 null
      */
-    static Thread start(boolean enabled, String index) {
+    public static Thread start(boolean enabled, String index) {
         if (!enabled) {
             return null;
         }
@@ -69,7 +75,7 @@ final class Updater {
             try {
                 check(index);
             } catch (Throwable e) {
-                Log.info(Text.of(Msg.UPDATE_CHECK_FAILED_IGNORING) + describe(e));
+                Log.info(Text.of(Msg.UPDATE_CHECK_FAILED_IGNORING) + Log.describe(e));
             }
         }, "mml-server-sync-update");
         thread.setDaemon(true);
@@ -80,23 +86,20 @@ final class Updater {
     /**
      * 拉索引并把新版本下载到 update 目录
      *
-     * - `indexText`: 索引地址；空串用默认地址
+     * @param indexText 索引地址；空串用默认地址
      */
-    static void check(String indexText) throws IOException {
+    public static void check(String indexText) throws IOException {
         Path jar = jarPath();
         if (jar == null) {
             Log.info(Text.of(Msg.NOT_RUNNING_FROM_A_JAR_SKIPPING_SELF_UPDATE));
             return;
         }
-        String index = indexText == null ? "" : indexText.trim();
-        if (index.isEmpty()) {
-            index = DEFAULT_INDEX;
-        }
+        String index = indexAddress(indexText);
         byte[] body;
         try {
             body = fetch(index);
         } catch (IOException e) {
-            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, describe(e)));
+            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, Log.describe(e)));
             return;
         }
         if (looksLikeHtml(body)) {
@@ -108,7 +111,7 @@ final class Updater {
         try {
             root = Json.map(Json.parse(body));
         } catch (IOException e) {
-            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, describe(e)));
+            Log.info(Text.of(Msg.UPDATE_INDEX_UNAVAILABLE_REASON, index, Log.describe(e)));
             return;
         }
         if (root == null) {
@@ -141,8 +144,82 @@ final class Updater {
         Log.info(Text.of(Msg.UPDATER_DOWNLOADED, target));
     }
 
-    /** 把原始 jar 路径记进系统属性，供同步计划跳过自身条目；须在入口最先调用 */
-    static void captureSelfJar() {
+    /**
+     * 从 JVM 属性 / 环境变量取自定义更新地址
+     *
+     * @return JVM 属性 / 环境变量里的地址；都没配时为空串
+     */
+    public static String configuredIndex() {
+        String property = System.getProperty(URL_PROPERTY, "").trim();
+        if (property.isEmpty()) {
+            property = System.getProperty(LEGACY_URL_PROPERTY, "").trim();
+        }
+        if (!property.isEmpty()) {
+            return property;
+        }
+        String env = System.getenv(URL_ENV);
+        if (env != null && !env.trim().isEmpty()) {
+            return env.trim();
+        }
+        env = System.getenv(LEGACY_URL_ENV);
+        return env == null ? "" : env.trim();
+    }
+
+    /**
+     * 规整自更新地址：目录自动补 index.json，空串用默认。
+     *
+     * @param text 启动参数里的地址
+     * @return 指向 index.json 的地址
+     */
+    public static String indexAddress(String text) {
+        String value = text == null ? "" : text.trim();
+        if (value.isEmpty()) {
+            return DEFAULT_INDEX;
+        }
+        // 查询串 / 锚点不参与文件名判断：.../index.json?token=x
+        String query = "";
+        int cut = queryStart(value);
+        if (cut >= 0) {
+            query = value.substring(cut);
+            value = value.substring(0, cut);
+        }
+        String normalized = value;
+        if (!Fs.hasScheme(value) || Fs.isWindowsPath(value)) {
+            // 本地文件或目录：--update-url D:/updates 也能用
+            try {
+                normalized = Paths.get(value).toAbsolutePath().normalize().toUri().toString();
+            } catch (RuntimeException e) {
+                normalized = value;
+            }
+        }
+        if (!normalized.toLowerCase(Locale.ROOT).endsWith(".json")) {
+            normalized = normalized.endsWith("/") || normalized.endsWith("\\")
+                    ? normalized + INDEX_FILE
+                    : normalized + "/" + INDEX_FILE;
+        }
+        return normalized + query;
+    }
+
+    /**
+     * 第一个查询串或锚点位置；没有时返回 -1
+     *
+     * @param value 地址
+     * @return 第一个 ?/# 的位置；没有时 -1
+     */
+    private static int queryStart(String value) {
+        int question = value.indexOf('?');
+        int hash = value.indexOf('#');
+        if (question < 0) {
+            return hash;
+        }
+        if (hash < 0) {
+            return question;
+        }
+        return Math.min(question, hash);
+    }
+
+/** 把原始 jar 路径记进系统属性，供同步计划跳过自身条目；须在入口最先调用 */
+    public static void captureSelfJar() {
         Path jar = jarPath();
         if (jar != null) {
             System.setProperty(SELF_JAR_KEY, jar.toAbsolutePath().normalize().toString());
@@ -150,18 +227,11 @@ final class Updater {
     }
 
     /**
-     * 原始 jar（被 -javaagent / -jar 指定、JVM 锁住的那份）的路径。
+     * 原始 jar（-javaagent / -jar 指定的那份）的路径；找不到返回 null。
      *
-     * 顺序：入口捕获的系统属性 → 当前类加载源（不经 update/ 运行时就是原始 jar）→
-     * 从 update/ 包运行时到它的上级目录找 `mml-server-sync*.jar`。最后这条兜底覆盖
-     * 「旧版本入口还没有捕获逻辑」的过渡期：第一次自更新到本版本后，运行代码来自
-     * update/，而锁住的原始 jar 是旧入口那份，属性尚未由它写入。
-     *
-     * # 返回值
-     *
-     * 原始 jar 路径；找不到时返回 null
+     * @return 原始 jar 路径；找不到时返回 null
      */
-    static Path originalJarPath() {
+    public static Path originalJarPath() {
         String property = System.getProperty(SELF_JAR_KEY, "").trim();
         if (!property.isEmpty()) {
             return Paths.get(property);
@@ -196,15 +266,13 @@ final class Updater {
     }
 
     /**
-     * 当前运行的 jar 路径
+     * 当前运行的 jar 路径；以 classes 目录运行时返回 null。
      *
-     * # 返回值
-     *
-     * jar 文件路径；以 classes 目录运行时返回 null
+     * @return jar 文件路径；以 classes 目录运行时返回 null
      */
-    static Path jarPath() {
+    public static Path jarPath() {
         try {
-            java.security.CodeSource source = Updater.class.getProtectionDomain().getCodeSource();
+            CodeSource source = Updater.class.getProtectionDomain().getCodeSource();
             if (source == null || source.getLocation() == null) {
                 return null;
             }
@@ -218,23 +286,20 @@ final class Updater {
     /**
      * 更新目录，与当前 jar 同级
      *
-     * - `jar`: 当前 jar
-     *
-     * # 返回值
-     *
-     * `<jar 所在目录>/update`
+     * @param jar 当前 jar
+     * @return jar 所在目录下的 update
      */
-    static Path updateDir(Path jar) {
+    public static Path updateDir(Path jar) {
         return jar.toAbsolutePath().normalize().getParent().resolve(UPDATE_DIR);
     }
 
     /**
      * 下载新 jar
      *
-     * - `url`: 新 jar 地址
-     * - `target`: 落盘位置，即 update/mml-server-sync-<版本>.jar
-     * - `sha1`: SHA1；空串表示不校验
-     * - `sha256`: SHA256；空串表示不校验
+     * @param url 新 jar 地址
+     * @param target 落盘位置，即 update/mml-server-sync-<版本>.jar
+     * @param sha1 SHA1；空串表示不校验
+     * @param sha256 SHA256；空串表示不校验
      */
     private static void download(String url, Path target, String sha1, String sha256)
             throws IOException {
@@ -259,7 +324,7 @@ final class Updater {
             try {
                 Files.move(part, target, StandardCopyOption.REPLACE_EXISTING,
                         StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            } catch (AtomicMoveNotSupportedException e) {
                 Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
             }
         } finally {
@@ -267,7 +332,14 @@ final class Updater {
         }
     }
 
-    /** 已经下过并且对得上：索引给了哈希就比哈希，没有就交给结构校验 */
+    /**
+     * 已经下过并且对得上：索引给了哈希就比哈希，没有就交给结构校验
+     *
+     * @param target 已下载文件
+     * @param sha1 索引里的 SHA1（可空）
+     * @param sha256 索引里的 SHA256（可空）
+     * @return 哈希或结构校验通过时 true
+     */
     private static boolean sameFile(Path target, String sha1, String sha256) {
         if (!sha1.isEmpty() || !sha256.isEmpty()) {
             return Downloader.matches(target, sha1, sha256);
@@ -275,14 +347,20 @@ final class Updater {
         return Verify.check(target) == null;
     }
 
-    /** 把索引里的哈希落到 jar 旁边，下次启动加载前用同一份值复核 */
+    /**
+     * 把索引里的哈希落到 jar 旁边，下次启动加载前用同一份值复核
+     *
+     * @param jar 目标 jar
+     * @param suffix 后缀
+     * @param value 哈希值
+     */
     private static void writeSidecar(Path jar, String suffix, String value) {
         Path file = jar.resolveSibling(jar.getFileName().toString() + suffix);
         try {
             if (value == null || value.trim().isEmpty()) {
                 Files.deleteIfExists(file);
             } else {
-                Files.write(file, value.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Files.write(file, value.trim().getBytes(StandardCharsets.UTF_8));
             }
         } catch (IOException ignored) {
             // 写不下去只影响下次启动的哈希复核，不影响本次更新
@@ -292,8 +370,8 @@ final class Updater {
     /**
      * 删掉更新目录里比新版本旧的包，只留一份
      *
-     * - `dir`: update 目录
-     * - `keep`: 刚下载好的那份
+     * @param dir update 目录
+     * @param keep 刚下载好的那份
      */
     private static void prune(Path dir, Path keep) {
         String keepName = keep.getFileName().toString();
@@ -322,12 +400,9 @@ final class Updater {
     /**
      * 把索引里的下载地址补成绝对地址
      *
-     * - `base`: 索引自身的地址
-     * - `url`: 索引里写的地址；已是绝对地址时原样返回
-     *
-     * # 返回值
-     *
-     * 绝对地址；解析失败时返回原值
+     * @param base 索引自身的地址
+     * @param url 索引里写的地址；已是绝对地址时原样返回
+     * @return 绝对地址；解析失败时返回原值
      */
     private static String resolveUrl(String base, String url) {
         if (url == null || url.isEmpty()
@@ -344,11 +419,8 @@ final class Updater {
     /**
      * 拉取索引
      *
-     * - `text`: HTTP(S) 或 file 地址
-     *
-     * # 返回值
-     *
-     * 响应体内容
+     * @param text HTTP(S) 或 file 地址
+     * @return 响应体内容
      */
     private static byte[] fetch(String text) throws IOException {
         URLConnection connection = open(text);
@@ -363,6 +435,13 @@ final class Updater {
         }
     }
 
+    /**
+     * 打开连接并检查状态码。
+     *
+     * @param text 地址
+     * @return 连接
+     * @throws IOException 地址非法或返回非 2xx 时
+     */
     private static URLConnection open(String text) throws IOException {
         URL url;
         try {
@@ -386,7 +465,12 @@ final class Updater {
         return connection;
     }
 
-    /** 版本号里只留做文件名的安全字符 */
+    /**
+     * 版本号里只留做文件名的安全字符
+     *
+     * @param version 版本号
+     * @return 只含安全字符的文件名
+     */
     private static String safeVersion(String version) {
         String out = version.replaceAll("[^A-Za-z0-9._-]", "_");
         return out.isEmpty() ? "unknown" : out;
@@ -395,14 +479,11 @@ final class Updater {
     /**
      * 版本比较，只比数字段，非数字部分忽略
      *
-     * - `left`: 左侧版本，如 1.2.0
-     * - `right`: 右侧版本
-     *
-     * # 返回值
-     *
-     * 左侧更新时为正数，相同时为 0
+     * @param left 左侧版本，如 1.2.0
+     * @param right 右侧版本
+     * @return 左侧更新时为正数，相同时为 0
      */
-    static int compare(String left, String right) {
+    public static int compare(String left, String right) {
         int[] a = numbers(left);
         int[] b = numbers(right);
         int length = Math.max(a.length, b.length);
@@ -416,6 +497,12 @@ final class Updater {
         return 0;
     }
 
+    /**
+     * 把版本号拆成数字段。
+     *
+     * @param version 版本号
+     * @return 数字段数组
+     */
     private static int[] numbers(String version) {
         String[] parts = (version == null ? "" : version.trim()).split("\\.");
         int[] out = new int[parts.length];
@@ -430,7 +517,12 @@ final class Updater {
         return out;
     }
 
-    /** 响应体开头是 '<'（跳过 BOM 与空白）时，基本可以确定是网页而不是 JSON */
+    /**
+     * 响应体开头是 '<'（跳过 BOM 与空白）时，基本可以确定是网页而不是 JSON
+     *
+     * @param data 响应体
+     * @return 开头是 '<' 时 true
+     */
     private static boolean looksLikeHtml(byte[] data) {
         int index = 0;
         if (data.length >= 3 && (data[0] & 0xFF) == 0xEF && (data[1] & 0xFF) == 0xBB
@@ -442,11 +534,5 @@ final class Updater {
             index++;
         }
         return index < data.length && data[index] == '<';
-    }
-
-    private static String describe(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.trim().isEmpty()
-                ? error.getClass().getSimpleName() : message;
     }
 }

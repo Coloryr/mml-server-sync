@@ -19,8 +19,9 @@
 
 ## 「更新索引不可用」/「更新索引返回的是网页」
 
-自更新索引地址（默认 `https://www.coloryr.com/mml-server-sync/index.json`）返回的不是
-JSON。常见原因是域名首页或 404 页面。修好索引，或者用 `--no-update` /
+自更新地址（默认 `https://www.coloryr.com/mml-server-sync/index.json`）返回的不是
+JSON。常见原因是域名首页或 404 页面。用 `--update-url` 换成自己的 `index.json`
+（填目录也行，会自动补 `index.json`）；也可以 `--no-update` /
 `-Dmml.serverSync.update=false` / `MML_SERVER_SYNC_NO_UPDATE=1` 关掉自更新。
 这不会影响同步本身。
 

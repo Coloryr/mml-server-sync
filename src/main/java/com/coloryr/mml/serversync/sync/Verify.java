@@ -1,4 +1,4 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.sync;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,17 +11,16 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 
-/**
- * 更新包校验，类加载之前先过这一关。
- *
- * 查四件事：能当 jar 完整读通（结构 + CRC）、带启动清单与入口类、入口类的 class 版本
- * 不高于当前 JVM、下载时记下的哈希一致。不通过就返回原因，调用方据此拒绝加载。
- */
-final class Verify {
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
+/** 更新包校验，类加载之前先过这一关。 */
+public final class Verify {
     /** 更新包必须带上的入口类 */
-    static final String ENTRY_CLASS = "com/coloryr/mml/serversync/Runner.class";
+    public static final String ENTRY_CLASS = "com/coloryr/mml/serversync/Runner.class";
     /** 下载时写下的哈希文件名后缀 */
-    static final String SHA1_SIDECAR = ".sha1";
+    public static final String SHA1_SIDECAR = ".sha1";
     private static final String SHA256_SIDECAR = ".sha256";
     /** class 文件头：魔数 4 字节 + 次版本 2 字节 + 主版本 2 字节 */
     private static final int CLASS_HEAD = 8;
@@ -29,15 +28,12 @@ final class Verify {
     private Verify() {}
 
     /**
-     * 校验一个更新包
+     * 校验更新包；通过返回 null，否则返回原因。
      *
-     * - `jar`: 更新包路径
-     *
-     * # 返回值
-     *
-     * 通过时返回 null，否则是不通过的原因
+     * @param jar 更新包路径
+     * @return 通过时返回 null，否则是不通过的原因
      */
-    static String check(Path jar) {
+    public static String check(Path jar) {
         if (!Files.isRegularFile(jar)) {
             return Text.of(Msg.NOT_A_FILE);
         }
@@ -46,7 +42,7 @@ final class Verify {
                 return Text.of(Msg.EMPTY_FILE);
             }
         } catch (IOException e) {
-            return Text.of(Msg.CANNOT_READ_THE_FILE_SIZE) + describe(e);
+            return Text.of(Msg.CANNOT_READ_THE_FILE_SIZE) + Log.describe(e);
         }
 
         try (JarFile file = new JarFile(jar.toFile(), true)) {
@@ -71,12 +67,18 @@ final class Verify {
             }
             readAll(file);
         } catch (Exception e) {
-            return Text.of(Msg.CANNOT_BE_READ_AS_A_JAR) + describe(e);
+            return Text.of(Msg.CANNOT_BE_READ_AS_A_JAR) + Log.describe(e);
         }
         return checkHash(jar);
     }
 
-    /** 入口类必须是 class 文件，且不能要求比当前 JVM 更新的版本 */
+    /**
+     * 入口类必须是 class 文件，且不能要求比当前 JVM 更新的版本
+     *
+     * @param file 更新包
+     * @param entry 入口类
+     * @return null 表示通过，否则是原因
+     */
     private static String checkClassVersion(JarFile file, JarEntry entry) throws IOException {
         byte[] head = new byte[CLASS_HEAD];
         int read = 0;
@@ -104,7 +106,11 @@ final class Verify {
         return null;
     }
 
-    /** 把所有条目读到底，让 ZipFile 校验 CRC 与解压是否完整 */
+    /**
+     * 把所有条目读到底，让 ZipFile 校验 CRC 与解压是否完整
+     *
+     * @param file 更新包
+     */
     private static void readAll(JarFile file) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         Enumeration<JarEntry> entries = file.entries();
@@ -121,7 +127,12 @@ final class Verify {
         }
     }
 
-    /** 下载时记下了哈希就比对，没记就只信上面的结构校验 */
+    /**
+     * 下载时记下了哈希就比对，没记就只信上面的结构校验
+     *
+     * @param jar 更新包
+     * @return null 表示通过，否则是原因
+     */
     private static String checkHash(Path jar) {
         String sha256 = sidecar(jar, SHA256_SIDECAR);
         if (!sha256.isEmpty() && !Downloader.hash(jar, "SHA-256").equalsIgnoreCase(sha256)) {
@@ -134,6 +145,13 @@ final class Verify {
         return null;
     }
 
+    /**
+     * 读下载时记下的哈希。
+     *
+     * @param jar 更新包
+     * @param suffix 后缀
+     * @return 哈希值；没有时为空串
+     */
     private static String sidecar(Path jar, String suffix) {
         Path file = jar.resolveSibling(jar.getFileName().toString() + suffix);
         try {
@@ -145,7 +163,11 @@ final class Verify {
         }
     }
 
-    /** 当前 JVM 能接受的 class 主版本，如 52 */
+    /**
+     * 当前 JVM 能接受的 class 主版本，如 52
+     *
+     * @return 当前 JVM 的 class 主版本；取不到时 0
+     */
     private static int runningClassVersion() {
         try {
             String value = System.getProperty("java.class.version", "");
@@ -156,13 +178,13 @@ final class Verify {
         }
     }
 
+    /**
+     * 字符串是否为空或全空白。
+     *
+     * @param value 字符串
+     * @return 空或全空白时 true
+     */
     private static boolean blank(String value) {
         return value == null || value.trim().isEmpty();
-    }
-
-    private static String describe(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.trim().isEmpty()
-                ? error.getClass().getSimpleName() : message;
     }
 }

@@ -1,6 +1,6 @@
 # 与 MML 启动器原生同步的差异
 
-本文对应当前 **1.8.0**。本工具是**非 MML 启动器**（PCL2 / HMCL / Prism / MultiMC /
+本文对应当前 **1.9.0**。本工具是**非 MML 启动器**（PCL2 / HMCL / Prism / MultiMC /
 安卓启动器）的更新器；MML 启动器自己启动游戏时会识别并跳过它，改用 MML 原生的
 `serverpack` 同步。两边读同一份 `server.json`，但需要区分哪些是 MML 协议、
 哪些是本更新器的扩展。

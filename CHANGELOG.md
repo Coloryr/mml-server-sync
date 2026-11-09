@@ -3,6 +3,18 @@
 版本号只比较数字段（`1.8.0 > 1.7.0 > 1.6.0`）。每个版本按「新增 / 改进 / 修复」归类，
 更细的行为说明见 [docs/](docs/) 下对应文档。
 
+## 1.9.0 — 2026-11-09
+
+**新增**
+
+- 新增 `--update-url`（短写 `-u`）自定义 jar 自身的更新地址：填 `index.json` 或它
+  所在的目录都可以，目录会自动补 `index.json`；也认本地路径，方便离线测试。
+- Agent 模式用 `-Dmml.serverSync.updateUrl=...` 或环境变量
+  `MML_SERVER_SYNC_UPDATE_URL` 设置同一地址；`--update-index`、
+  `mml.serverSync.updateIndex`、`MML_SERVER_SYNC_INDEX` 保留为旧写法。
+- `--update-url` / `--update-index` 都能直接给到索引所在目录，不再要求写全
+  `index.json`。
+
 ## 1.8.0 — 2026-11-09
 
 **改进**

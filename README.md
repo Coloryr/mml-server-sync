@@ -5,7 +5,7 @@ MML 服务器实例（整合包）的独立更新器：读取 MML 生成的 `ser
 启动器使用，也支持 FCL / PojavLauncher 等安卓启动器；不兼容 HMCL
 `server-manifest.json` 或其他清单格式。
 
-当前版本 **1.8.0**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **1.9.0**，更新记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 与 MML 的关系
 
@@ -32,9 +32,23 @@ MML 服务器实例（整合包）的独立更新器：读取 MML 生成的 `ser
 - **进度与取消**：Swing 进度窗显示阶段、进度与当前文件，可暂停、跳过本次更新或
   结束游戏；失败时可选择重试 / 跳过 / 关闭游戏。
 - **自更新**：读取更新索引（默认 `https://www.coloryr.com/mml-server-sync/index.json`），
-  新版本下载到 jar 同目录的 `update/`，下次启动由独立类加载器加载。
+  新版本下载到 jar 同目录的 `update/`，下次启动由独立类加载器加载；用 `--update-url`
+  （或 `-Dmml.serverSync.updateUrl` / `MML_SERVER_SYNC_UPDATE_URL`）可以换成自己的更新地址。
 - **界面**：中英双语按系统语言切换；FCL / Pojav / Zalith 等移动启动器自动放大界面，
   可用 `--ui-scale=2.5` 覆盖。
+
+## 代码结构
+
+| 包 | 内容 |
+| --- | --- |
+| `com.coloryr.mml.serversync` | 入口与引导：`Main`、`Agent`、`Bootstrap`、`Runner` |
+| `com.coloryr.mml.serversync.sync` | 同步核心：清单、下载、落盘、删除、自选模组状态 |
+| `com.coloryr.mml.serversync.update` | 自更新：索引、下载、更新包类加载器 |
+| `com.coloryr.mml.serversync.ui` | Swing 界面：进度窗、缩放、自选模组与确认框 |
+| `com.coloryr.mml.serversync.util` | 日志、文案、JSON、取消状态与异常 |
+| `com.coloryr.mml.serversync.host` | 宿主与更新包共享的 `Progress` 接口 |
+
+`Runner` 的类名和 `run` 签名跨版本保持稳定（自更新会反射调用更新包里的这一份）。
 
 ## 快速开始
 
@@ -66,6 +80,7 @@ java -jar mml-server-sync.jar -m https://example.com/server.json -g "D:\Instance
 | `--skip` | 指定自选模组本次不下载；可重复或逗号分隔 |
 | `--no-delete` | 不删除旧清单里已移除的受管文件 |
 | `--no-gui` | 不显示进度窗 |
+| `--update-url` | 自更新地址（jar 自身）；可填 `index.json` 或它所在的目录 |
 
 完整参数、退出码见 [docs/cli.md](docs/cli.md)。
 

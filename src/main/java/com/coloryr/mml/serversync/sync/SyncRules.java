@@ -1,4 +1,4 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.sync;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -9,26 +9,22 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
- * 发布端旁文件 `server.json.sync.json`：累积废弃路径与屏蔽规则。
- *
- * 这不是 MML 的清单设计：MML 只生成 `server.json`（含可选模组与四种配置方式），
- * 不会生成或读取本旁文件。它是本更新器的扩展能力，长期方案优先使用
- * `Archives` 压缩包同步，逐文件模式再按需使用。
- * 规则语义与发布端 `excludePatterns` 一致：目录前缀、通配、精确匹配，一律忽略大小写。
- * 旁文件缺失时按空规则处理，保留旧清单删除行为。
- */
-final class SyncRules {
+import com.coloryr.mml.serversync.util.Json;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
+/** 发布端旁文件 `server.json.sync.json`：历史废弃路径与屏蔽规则。 */
+public final class SyncRules {
     /** 禁用后缀：与 MMC / HMCL 一致 */
-    static final String DISABLED_SUFFIX = ".disabled";
+    public static final String DISABLED_SUFFIX = ".disabled";
     /** 旧版禁用后缀，读取时仍认 */
-    static final String LEGACY_DISABLE_SUFFIX = ".disable";
+    public static final String LEGACY_DISABLE_SUFFIX = ".disable";
 
     private static final SyncRules EMPTY = new SyncRules(
             Collections.<String>emptyList(), Collections.<String>emptyList());
 
     /** 历史废弃路径，只接受精确相对路径 */
-    final List<String> removed;
+    public final List<String> removed;
 
     private final Set<String> exact = new HashSet<>();
     private final List<String> prefixes = new ArrayList<>();
@@ -54,12 +50,17 @@ final class SyncRules {
         }
     }
 
-    static SyncRules empty() {
+    public static SyncRules empty() {
         return EMPTY;
     }
 
-    /** 兼容发布端新旧字段名；同名条目只保留一次 */
-    static SyncRules parse(byte[] data) throws IOException {
+    /**
+     * 兼容发布端新旧字段名；同名条目只保留一次
+     *
+     * @param data 旁文件内容
+     * @return 解析出的规则
+     */
+    public static SyncRules parse(byte[] data) throws IOException {
         Map<String, Object> root = Json.map(Json.parse(data));
         if (root == null) {
             throw new IOException(Text.of(Msg.SYNC_RULES_ROOT_INVALID));
@@ -68,16 +69,22 @@ final class SyncRules {
                 strings(root, "Ignore", "noOverwriteFiles"));
     }
 
-    /** 生效的规则条数；无效写法（越界、空规则）不计入 */
-    int ignoreCount() {
+    /**
+     * 生效的规则条数；无效写法（越界、空规则）不计入
+     *
+     * @return 生效的屏蔽规则条数
+     */
+    public int ignoreCount() {
         return exact.size() + prefixes.size() + globs.size();
     }
 
     /**
-     * 路径是否受屏蔽规则保护。禁用后缀的变体按原路径判断，避免保护名单漏掉
-     * 玩家手动停用的同名文件。
+     * 路径是否受屏蔽规则保护。
+     *
+     * @param rawPath 清单路径
+     * @return 受屏蔽保护时 true
      */
-    boolean isIgnored(String rawPath) {
+    public boolean isIgnored(String rawPath) {
         String path = Fs.pathKey(rawPath);
         if (path.isEmpty()) {
             return false;
@@ -89,6 +96,12 @@ final class SyncRules {
         return !variant.equals(path) && matches(variant);
     }
 
+    /**
+     * 规范化路径是否命中规则。
+     *
+     * @param path 规范化路径键
+     * @return 命中任一规则时 true
+     */
     private boolean matches(String path) {
         if (exact.contains(path)) {
             return true;
@@ -106,6 +119,13 @@ final class SyncRules {
         return false;
     }
 
+    /**
+     * 按候选键读出规则列表。
+     *
+     * @param root 根对象
+     * @param keys 候选字段名
+     * @return 去重后的规则列表
+     */
     private static List<String> strings(Map<String, Object> root, String... keys) {
         List<String> out = new ArrayList<>();
         for (String key : keys) {
@@ -123,7 +143,12 @@ final class SyncRules {
         return out;
     }
 
-    /** 数组元素可以是字符串，也可以是带 `path` / `File` 字段的对象 */
+    /**
+     * 数组元素可以是字符串，也可以是带 `path` / `File` 字段的对象
+     *
+     * @param value 数组元素
+     * @return 路径文字；无法识别时空串
+     */
     private static String text(Object value) {
         if (value instanceof String) {
             return ((String) value).trim();
@@ -132,8 +157,13 @@ final class SyncRules {
         return item == null ? "" : Json.string(item, "path", "Path", "File", "file").trim();
     }
 
-    /** 去掉禁用后缀；没有后缀时原样返回。入参必须是已规范化的路径键。 */
-    static String stripDisabledSuffix(String path) {
+    /**
+     * 去掉禁用后缀；没有后缀时原样返回。入参必须是已规范化的路径键。
+     *
+     * @param path 规范化路径键
+     * @return 去掉禁用后缀后的路径
+     */
+    public static String stripDisabledSuffix(String path) {
         for (String suffix : new String[]{DISABLED_SUFFIX, LEGACY_DISABLE_SUFFIX}) {
             if (path.endsWith(suffix)) {
                 return path.substring(0, path.length() - suffix.length());
@@ -143,8 +173,10 @@ final class SyncRules {
     }
 
     /**
-     * `*` 允许跨越目录，与发布端 `path_matcher` 一致：只有 `*` 与 `?` 是通配符，
-     * 方括号按字面处理（发布端也只在含 `*` / `?` 时才走通配分支）。
+     * 通配转正则：只有 `*` 与 `?` 是通配符，`*` 可跨目录。
+     *
+     * @param pattern 通配规则
+     * @return 正则文本
      */
     private static String toRegex(String pattern) {
         StringBuilder out = new StringBuilder();

@@ -8,16 +8,25 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
+import com.coloryr.mml.serversync.update.Updater;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
 /**
- * -javaagent 入口。
+ * -javaagent 入口：在游戏 main 之前完成同步。
  *
- * 用法：-javaagent:mml-server-sync.jar=http://example.com/server.json
- * agent 在游戏 main 之前执行同步；如果认出是 MML 启动器，直接跳过。
- * 设环境变量 MML_SKIP=true 可以强制跳过这段识别，用于在 MML 下验证同步。
+ * 参数是 server.json 地址；识别到 MML 启动器时跳过，`MML_SKIP=true` 可强制同步。
  */
 public final class Agent {
     private Agent() {}
 
+    /**
+     * 在游戏 main 之前执行同步。
+     *
+     * @param agentArgs server.json 地址
+     * @param instrumentation JVM 传入的 Instrumentation（未使用）
+     */
     public static void premain(String agentArgs, Instrumentation instrumentation) {
         // premain 从 -javaagent 指定的原始 jar 加载，此刻的类加载源就是原始 jar
         Updater.captureSelfJar();
@@ -51,14 +60,9 @@ public final class Agent {
     /**
      * 把 agent 的配置翻成命令行参数，交给 Runner 解析
      *
-     * 自更新会加载新版本，入参统一走命令行，两个入口就只用维护一套解析逻辑。
-     *
-     * - `manifest`: 清单地址
-     * - `gameDir`: 游戏目录
-     *
-     * # 返回值
-     *
-     * 等价的参数数组
+     * @param manifest 清单地址
+     * @param gameDir 游戏目录
+     * @return 等价的参数数组
      */
     private static String[] agentArgs(String manifest, Path gameDir) {
         Path state = stateDir(gameDir);
@@ -99,14 +103,19 @@ public final class Agent {
             args.add("--skip");
             args.add(skip);
         }
-        String index = updateIndex();
+        String index = Updater.configuredIndex();
         if (!index.isEmpty()) {
-            args.add("--update-index");
+            args.add("--update-url");
             args.add(index);
         }
         return args.toArray(new String[0]);
     }
 
+    /**
+     * 取游戏目录：JVM 属性 → 环境变量 → 当前工作目录。
+     *
+     * @return 游戏目录
+     */
     private static Path gameDir() {
         String property = System.getProperty("mml.serverSync.gameDir", "").trim();
         if (!property.isEmpty()) {
@@ -119,7 +128,12 @@ public final class Agent {
         return Paths.get(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
     }
 
-    /** 下载线程数，缺省或非法时用 16。 */
+    /**
+     * 下载线程数，缺省或非法时用 16。
+     *
+     * @param value 属性值
+     * @return 1-64；缺省或非法时 16
+     */
     private static int threadsOf(String value) {
         if (value == null || value.trim().isEmpty()) {
             return 16;
@@ -131,7 +145,11 @@ public final class Agent {
         }
     }
 
-    /** 是否显示进度窗口；-Dmml.serverSync.gui=false 或 MML_SERVER_SYNC_NO_GUI=1 关掉。 */
+    /**
+     * 是否显示进度窗口；-Dmml.serverSync.gui=false 或 MML_SERVER_SYNC_NO_GUI=1 关掉。
+     *
+     * @return 要显示进度窗时 true
+     */
     private static boolean guiEnabled() {
         String value = System.getProperty("mml.serverSync.gui", "").trim();
         if (value.isEmpty()) {
@@ -140,7 +158,11 @@ public final class Agent {
         return truthy(value);
     }
 
-    /** 是否检查自更新；-Dmml.serverSync.update=false 或 MML_SERVER_SYNC_NO_UPDATE=1 关掉。 */
+    /**
+     * 是否检查自更新；-Dmml.serverSync.update=false 或 MML_SERVER_SYNC_NO_UPDATE=1 关掉。
+     *
+     * @return 要检查自更新时 true
+     */
     private static boolean updateEnabled() {
         String value = System.getProperty("mml.serverSync.update", "").trim();
         if (value.isEmpty()) {
@@ -149,7 +171,11 @@ public final class Agent {
         return truthy(value);
     }
 
-    /** 是否允许弹自选模组勾选窗；-Dmml.serverSync.noAsk=true 或 MML_SERVER_SYNC_NO_ASK=1 关掉。 */
+    /**
+     * 是否允许弹自选模组勾选窗；-Dmml.serverSync.noAsk=true 或 MML_SERVER_SYNC_NO_ASK=1 关掉。
+     *
+     * @return 允许弹自选模组窗时 true
+     */
     private static boolean askEnabled() {
         String value = System.getProperty("mml.serverSync.noAsk", "").trim();
         if (value.isEmpty()) {
@@ -158,7 +184,11 @@ public final class Agent {
         return !truthy(value);
     }
 
-    /** 脚本 / 启动器传来的跳过列表：JVM 属性优先，其次环境变量；逗号分隔 */
+    /**
+     * 脚本 / 启动器传来的跳过列表：JVM 属性优先，其次环境变量；逗号分隔
+     *
+     * @return 逗号分隔的跳过路径；没配时空串
+     */
     private static String skipArgs() {
         String property = System.getProperty("mml.serverSync.skip", "").trim();
         if (!property.isEmpty()) {
@@ -168,17 +198,12 @@ public final class Agent {
         return env == null ? "" : env.trim();
     }
 
-    /** 自更新索引地址；JVM 属性优先，其次环境变量，空串表示用默认地址。 */
-    private static String updateIndex() {
-        String property = System.getProperty("mml.serverSync.updateIndex", "").trim();
-        if (!property.isEmpty()) {
-            return property;
-        }
-        String env = System.getenv("MML_SERVER_SYNC_INDEX");
-        return env == null ? "" : env.trim();
-    }
-
-    /** 日志文件路径：JVM 属性可覆盖，默认放在状态目录下。 */
+    /**
+     * 日志文件路径：JVM 属性可覆盖，默认放在状态目录下。
+     *
+     * @param stateDir 状态目录
+     * @return 日志文件路径
+     */
     private static Path logFile(Path stateDir) {
         String property = System.getProperty("mml.serverSync.log", "").trim();
         if (!property.isEmpty()) {
@@ -187,6 +212,12 @@ public final class Agent {
         return stateDir.resolve(Log.FILE_NAME);
     }
 
+    /**
+     * 取状态目录。
+     *
+     * @param gameDir 游戏目录
+     * @return 状态目录
+     */
     private static Path stateDir(Path gameDir) {
         String property = System.getProperty("mml.serverSync.stateDir", "").trim();
         if (!property.isEmpty()) {
@@ -199,12 +230,17 @@ public final class Agent {
         return gameDir.resolve(".mml-server-sync");
     }
 
-    /** 是否强制跳过 MML 启动器识别，由环境变量 MML_SKIP 控制。 */
+/** 是否强制跳过 MML 启动器识别，由环境变量 MML_SKIP 控制。 */
     private static boolean skipLauncherCheck() {
         return truthy(System.getenv("MML_SKIP"));
     }
 
-    /** 是否是 MML 启动器起的游戏进程。 */
+    /**
+     * 是否是 MML 启动器起的游戏进程。
+     *
+     * @param gameDir 游戏目录
+     * @return 是 MML 启动的进程时 true
+     */
     static boolean isMmlLauncher(Path gameDir) {
         if (truthy(System.getProperty("mml.launcher"))) {
             return true;
@@ -227,8 +263,12 @@ public final class Agent {
         return parentLooksLikeMml();
     }
 
-    /** FCL / PojavLauncher 等安卓启动器的环境特征；MML 是桌面端，不会带这些变量 */
-    static boolean isAndroidLauncher() {
+    /**
+     * FCL / PojavLauncher 等安卓启动器的环境特征；MML 是桌面端，不会带这些变量
+     *
+     * @return 是安卓启动器时 true
+     */
+    public static boolean isAndroidLauncher() {
         // 启动器会把 os.version 写成 Android-15 / Android-16
         if (System.getProperty("os.version", "").toLowerCase(Locale.ROOT).contains("android")) {
             return true;
@@ -244,7 +284,12 @@ public final class Agent {
         return false;
     }
 
-    /** MML 游戏进程会带 ARG_GAME_DIR / ARG_GAME_BASE_DIR 等启动参数环境变量。 */
+    /**
+     * MML 游戏进程会带 ARG_GAME_DIR / ARG_GAME_BASE_DIR 等启动参数环境变量。
+     *
+     * @param gameDir 游戏目录
+     * @return 命中 ARG_* 时 true
+     */
     private static boolean hasMmlGameArgs(Path gameDir) {
         String game = System.getenv("ARG_GAME_DIR");
         String base = System.getenv("ARG_GAME_BASE_DIR");
@@ -258,7 +303,9 @@ public final class Agent {
 
     /**
      * MML 会默认隔离用户目录，把 HOME / USERPROFILE / APPDATA / LOCALAPPDATA 指到实例根目录。
-     * 这是现有 MML 版本一定会传的环境变量特征。
+     *
+     * @param gameDir 游戏目录
+     * @return 用户目录被隔离到实例时 true
      */
     private static boolean isolatedToInstance(Path gameDir) {
         Path instance = gameDir.getParent();
@@ -281,6 +328,13 @@ public final class Agent {
         return false;
     }
 
+    /**
+     * 两个路径规范化后是否相同。
+     *
+     * @param value 路径字符串
+     * @param expected 期望路径
+     * @return 相同或路径非法时 false
+     */
     private static boolean samePath(String value, Path expected) {
         if (value == null || value.trim().isEmpty()) {
             return false;
@@ -292,6 +346,12 @@ public final class Agent {
         }
     }
 
+    /**
+     * 配置值是否表示真。
+     *
+     * @param value 配置值
+     * @return 1 / true / yes / mml 时 true
+     */
     private static boolean truthy(String value) {
         if (value == null) {
             return false;
@@ -303,7 +363,8 @@ public final class Agent {
 
     /**
      * 旧版 MML 没有写环境变量时的兜底：Java 9+ 反射读父进程命令行。
-     * Java 8 没有 ProcessHandle，只能靠环境变量，捕获所有反射异常。
+     *
+     * @return 父进程是 MML 时 true
      */
     private static boolean parentLooksLikeMml() {
         try {

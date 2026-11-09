@@ -1,17 +1,25 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.util;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /** 只服务清单解析的轻量 JSON 读取器，避免给独立 jar 增加第三方依赖。 */
-final class Json {
+public final class Json {
     private Json() {}
 
-    static Object parse(byte[] data) throws IOException {
-        String text = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+    /**
+     * 解析 UTF-8 JSON。
+     *
+     * @param data JSON 字节
+     * @return 根值
+     * @throws IOException JSON 非法时
+     */
+    public static Object parse(byte[] data) throws IOException {
+        String text = new String(data, StandardCharsets.UTF_8);
         if (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
             text = text.substring(1);
         }
@@ -24,23 +32,42 @@ final class Json {
         return value;
     }
 
+    /**
+     * 把值当 JSON 对象。
+     *
+     * @param value 任意值
+     * @return Map；不是对象时 null
+     */
     @SuppressWarnings("unchecked")
-    static Map<String, Object> map(Object value) {
+    public static Map<String, Object> map(Object value) {
         if (value instanceof Map) {
             return (Map<String, Object>) value;
         }
         return null;
     }
 
+    /**
+     * 把值当 JSON 数组。
+     *
+     * @param value 任意值
+     * @return List；不是数组时 null
+     */
     @SuppressWarnings("unchecked")
-    static List<Object> list(Object value) {
+    public static List<Object> list(Object value) {
         if (value instanceof List) {
             return (List<Object>) value;
         }
         return null;
     }
 
-    static String string(Map<String, Object> map, String... keys) {
+    /**
+     * 按候选键取字符串。
+     *
+     * @param map JSON 对象
+     * @param keys 候选键
+     * @return 第一个字符串值；没有时空串
+     */
+    public static String string(Map<String, Object> map, String... keys) {
         for (String key : keys) {
             Object value = map.get(key);
             if (value instanceof String) {
@@ -50,7 +77,14 @@ final class Json {
         return "";
     }
 
-    static boolean bool(Map<String, Object> map, String key) {
+    /**
+     * 取布尔值。
+     *
+     * @param map JSON 对象
+     * @param key 键
+     * @return 键为 true 时 true
+     */
+    public static boolean bool(Map<String, Object> map, String key) {
         Object value = map.get(key);
         return value instanceof Boolean && (Boolean) value;
     }
@@ -209,6 +243,11 @@ final class Json {
             }
         }
 
+        /**
+         * 匹配字面量。
+         *
+         * @param word 期望字面量
+         */
         private void literal(String word) throws IOException {
             if (!text.startsWith(word, pos)) {
                 throw error(Text.of(Msg.EXPECTED) + word);
@@ -216,6 +255,11 @@ final class Json {
             pos += word.length();
         }
 
+        /**
+         * 匹配单个字符。
+         *
+         * @param expected 期望字符
+         */
         private void expect(char expected) throws IOException {
             ws();
             if (pos >= text.length() || text.charAt(pos) != expected) {
@@ -224,6 +268,12 @@ final class Json {
             pos++;
         }
 
+        /**
+         * 消费一个字符（可选）。
+         *
+         * @param expected 期望字符
+         * @return 匹配并消费时 true
+         */
         private boolean take(char expected) {
             if (pos < text.length() && text.charAt(pos) == expected) {
                 pos++;
@@ -238,6 +288,12 @@ final class Json {
             }
         }
 
+        /**
+         * 构造带行列号的解析异常。
+         *
+         * @param message 原因
+         * @return 异常
+         */
         IOException error(String message) {
             int line = 1;
             int col = 1;
@@ -249,7 +305,8 @@ final class Json {
                     col++;
                 }
             }
-            return new IOException(message + Text.of(Msg.LINE) + line + Text.of(Msg.COLUMN) + col + Text.of(Msg.TEXT_45));
+            return new IOException(message + Text.of(Msg.LINE) + line
+                    + Text.of(Msg.COLUMN) + col + Text.of(Msg.TEXT_45));
         }
     }
 }

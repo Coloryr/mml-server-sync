@@ -46,7 +46,7 @@ Premain-Class: com.coloryr.mml.serversync.Agent
 
 ```text
 build/release/index.json
-build/release/mml-server-sync-1.8.0.jar
+build/release/mml-server-sync-1.9.0.jar
 ```
 
 - `version` / `url` 取 `build.gradle` 的版本号，jar 名固定为 `mml-server-sync-<version>.jar`；
@@ -80,8 +80,8 @@ build/release/mml-server-sync-1.8.0.jar
 
 ```json
 {
-  "version": "1.8.0",
-  "url": "mml-server-sync-1.8.0.jar",
+  "version": "1.9.0",
+  "url": "mml-server-sync-1.9.0.jar",
   "sha1": "可选的 SHA1，填了就校验",
   "sha256": "可选的 SHA256，填了就校验",
   "notes": "可选，只写进日志"
@@ -93,8 +93,10 @@ build/release/mml-server-sync-1.8.0.jar
 - 版本只比数字段：`1.8.0 > 1.7.0 > 1.6.0`；`-beta` 这类后缀不参与比较。
 - 加载前会校验：jar 结构 / CRC、启动清单与入口类、class 版本、以及下载时记下的哈希；
   不通过就跳过并删掉坏包，回退到当前版本。
-- 换索引：`--update-index <URL>`、`-Dmml.serverSync.updateIndex=...`、
-  `MML_SERVER_SYNC_INDEX=...`；本地调试可用 `file:///D:/.../index.json`。
+- 换索引：`--update-url <URL|目录>`、`-Dmml.serverSync.updateUrl=...`、
+  `MML_SERVER_SYNC_UPDATE_URL=...`；填目录会自动补 `index.json`，本地调试可用
+  `file:///D:/.../index.json`（或直接给本地目录）。旧写法 `--update-index` /
+  `mml.serverSync.updateIndex` / `MML_SERVER_SYNC_INDEX` 仍可用。
 - 关掉自更新：`--no-update`、`-Dmml.serverSync.update=false`、`MML_SERVER_SYNC_NO_UPDATE=1`。
 - 索引必须是 JSON：地址被指到网页（常见于域名首页）时只记一行
   `更新索引返回的是网页而不是 JSON，跳过自更新`，不影响同步。

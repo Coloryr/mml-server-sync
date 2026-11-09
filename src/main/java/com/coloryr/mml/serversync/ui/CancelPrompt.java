@@ -1,9 +1,8 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
-import java.awt.Frame;
 import java.awt.event.KeyEvent;
 import javax.swing.JButton;
 import javax.swing.JComponent;
@@ -13,14 +12,18 @@ import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
 /**
  * 更新过程中点取消后的确认框：跳过本次更新，还是结束游戏。
  *
  * 关窗或按 Esc 等于「继续更新」：取消是手滑时还能接着跑，不会一按就停。
  */
-final class CancelPrompt {
+public final class CancelPrompt {
     /** 三个出路 */
-    enum Choice {
+    public enum Choice {
         /** 继续更新 */
         CONTINUE,
         /** 跳过更新，继续启动 */
@@ -34,14 +37,10 @@ final class CancelPrompt {
     /**
      * 弹出确认框
      *
-     * - `parent`: 父窗口，可为 null
-     *
-     * # 返回值
-     *
-     * 见 {@link Choice}；弹不出来时按继续更新处理
+     * @param parent 父窗口，可为 null
+     * @return 见 {@link Choice}；弹不出来时按继续更新处理
      */
-    @SuppressWarnings("unchecked")
-    static Choice ask(Component parent) {
+    public static Choice ask(Component parent) {
         if (SwingUtilities.isEventDispatchThread()) {
             return show(parent);
         }
@@ -54,9 +53,15 @@ final class CancelPrompt {
         return result[0];
     }
 
+    /**
+     * 显示确认框。
+     *
+     * @param parent 父窗口，可为 null
+     * @return 玩家选择
+     */
     private static Choice show(Component parent) {
         UiScale.apply();
-        final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.CANCEL_DIALOG_TITLE), true);
+        final JDialog dialog = new JDialog(UiScale.ownerOf(parent), Text.of(Msg.CANCEL_DIALOG_TITLE), true);
         final Choice[] choice = {Choice.CONTINUE};
         // 点对话框的关闭按钮等于「继续更新」：释放资源后照常返回，不留一个只隐藏未释放的窗口
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -104,16 +109,4 @@ final class CancelPrompt {
         return choice[0];
     }
 
-    private static Frame ownerOf(Component parent) {
-        if (parent instanceof Frame) {
-            return (Frame) parent;
-        }
-        if (parent != null) {
-            java.awt.Window window = SwingUtilities.getWindowAncestor(parent);
-            if (window instanceof Frame) {
-                return (Frame) window;
-            }
-        }
-        return null;
-    }
 }

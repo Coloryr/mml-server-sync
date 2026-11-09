@@ -1,12 +1,15 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.sync;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
+import java.net.URLEncoder;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -20,8 +23,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipException;
 
+import com.coloryr.mml.serversync.util.Cancels;
+import com.coloryr.mml.serversync.util.Json;
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
 /** HTTP 下载、平台地址解析与哈希校验。 */
-final class Downloader {
+public final class Downloader {
     /** 字节进度两条日志的最小间隔，单位纳秒 */
     private static final long REPORT_INTERVAL = 1_000_000_000L;
     /** 单个文件最多尝试次数：Connection reset 这类瞬时错误重试往往就好 */
@@ -31,12 +40,18 @@ final class Downloader {
     private final boolean quiet;
     private final Map<String, String> resolved = new ConcurrentHashMap<>();
 
-    Downloader(String apiKey, boolean quiet) {
+    public Downloader(String apiKey, boolean quiet) {
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.quiet = quiet;
     }
 
-    String resolveFile(Manifest.FileEntry item) throws IOException {
+    /**
+     * 解析条目的下载地址。
+     *
+     * @param item 清单条目
+     * @return 可下载地址
+     */
+    public String resolveFile(Manifest.FileEntry item) throws IOException {
         if (!item.url.isEmpty()) {
             return item.url;
         }
@@ -59,6 +74,13 @@ final class Downloader {
         return url;
     }
 
+    /**
+     * 是否是 CurseForge 条目（编号为纯数字）。
+     *
+     * @param pid 项目编号
+     * @param fid 文件编号
+     * @return 按 CurseForge 处理时 true
+     */
     private static boolean isCurseForge(String pid, String fid) {
         String value = pid.isEmpty() ? fid : pid;
         if (value.isEmpty()) {
@@ -72,6 +94,12 @@ final class Downloader {
         }
     }
 
+    /**
+     * 解析 CurseForge 下载地址：优先 API，失败时退回 CDN 规则。
+     *
+     * @param item 清单条目
+     * @return 下载地址
+     */
     private String resolveCurseForge(Manifest.FileEntry item) throws IOException {
         if (!apiKey.isEmpty() && !item.pid.isEmpty() && !item.fid.isEmpty()) {
             try {
@@ -95,12 +123,18 @@ final class Downloader {
         }
         String name = item.fileName();
         try {
-            name = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20");
-        } catch (java.io.UnsupportedEncodingException ignored) {
+            name = URLEncoder.encode(name, "UTF-8").replace("+", "%20");
+        } catch (UnsupportedEncodingException ignored) {
         }
         return "https://edge.forgecdn.net/files/" + (id / 1000) + "/" + (id % 1000) + "/" + name;
     }
 
+    /**
+     * 解析 Modrinth 下载地址。
+     *
+     * @param fid 版本编号
+     * @return 下载地址；解析不到时空串
+     */
     private String resolveModrinth(String fid) throws IOException {
         String api = "https://api.modrinth.com/v2/version/" + encodeSegment(fid);
         Map<String, Object> root = Json.map(Json.parse(fetch(api)));
@@ -128,12 +162,15 @@ final class Downloader {
     }
 
     /**
-     * 下载并校验；本地文件已匹配时直接跳过。返回是否真的下载了。
+     * 下载并校验；本地文件已匹配时直接跳过。
      *
-     * 连接被重置、读超时这类瞬时错误会重试（最多 {@link #DOWNLOAD_ATTEMPTS} 次）；
-     * 哈希不匹配说明内容不对，重试没有意义，直接失败。
+     * @param url 下载地址
+     * @param target 落盘位置
+     * @param sha1 期望 SHA1（可空）
+     * @param sha256 期望 SHA256（可空）
+     * @return 真的下载了返回 true
      */
-    boolean download(String url, Path target, String sha1, String sha256) throws IOException {
+    public boolean download(String url, Path target, String sha1, String sha256) throws IOException {
         if (url == null || url.trim().isEmpty()) {
             throw new IOException(Text.of(Msg.DOWNLOAD_URL_IS_EMPTY) + target);
         }
@@ -158,7 +195,7 @@ final class Downloader {
                     if (attempt < DOWNLOAD_ATTEMPTS) {
                         if (!quiet) {
                             Log.info(Text.of(Msg.DOWNLOAD_RETRY, attempt, target.getFileName(),
-                                    describe(e)));
+                                    Log.describe(e)));
                         }
                         sleep(400L * attempt);
                     }
@@ -171,7 +208,16 @@ final class Downloader {
         }
     }
 
-    /** 下载一次；失败时由调用方决定是否重试 */
+    /**
+     * 下载一次；失败时由调用方决定是否重试
+     *
+     * @param url 下载地址
+     * @param target 落盘位置
+     * @param temp 临时文件
+     * @param sha1 期望 SHA1
+     * @param sha256 期望 SHA256
+     * @return 真的下载了返回 true
+     */
     private boolean downloadOnce(String url, Path target, Path temp, String sha1, String sha256)
             throws IOException {
         Files.deleteIfExists(temp);
@@ -215,7 +261,7 @@ final class Downloader {
             }
             try {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            } catch (AtomicMoveNotSupportedException e) {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
             }
             if (!quiet) {
@@ -230,11 +276,11 @@ final class Downloader {
     /**
      * 打印一条下载字节进度，约每秒一条
      *
-     * - `target`: 目标文件，只取文件名
-     * - `done`: 已下载字节数
-     * - `total`: 总字节数，服务端没给长度时为 0 或负数
-     * - `delta`: 距上一条进度新增的字节数
-     * - `elapsed`: 距上一条进度的纳秒数
+     * @param target 目标文件，只取文件名
+     * @param done 已下载字节数
+     * @param total 总字节数，服务端没给长度时为 0 或负数
+     * @param delta 距上一条进度新增的字节数
+     * @param elapsed 距上一条进度的纳秒数
      */
     private static void report(Path target, long done, long total, long delta, long elapsed) {
         double elapsedSeconds = elapsed / 1_000_000_000.0;
@@ -247,42 +293,50 @@ final class Downloader {
                 + speedText(speed) + ")");
     }
 
-    byte[] fetch(String url) throws IOException {
+    /**
+     * 取一份 JSON。
+     *
+     * @param url 地址
+     * @return 响应体
+     */
+    public byte[] fetch(String url) throws IOException {
         return fetch(url, Collections.<String, String>emptyMap(), null);
     }
 
-    /** 清单下载进度回调：约每秒通知一次，与进度日志同节奏 */
-    interface FetchListener {
+/** 清单下载进度回调：约每秒通知一次，与进度日志同节奏 */
+    public interface FetchListener {
         void progress(long done, long total);
     }
 
     /**
      * 取一份小文件，不打印"获取 JSON"日志
      *
-     * 用于清单指纹这类每次启动都会探一次的地址。
-     *
-     * - `url`: 地址
-     *
-     * # 返回值
-     *
-     * 响应体内容；取不到时抛 IOException
+     * @param url 地址
+     * @return 响应体内容；取不到时抛 IOException
      */
-    byte[] fetchQuiet(String url) throws IOException {
+    public byte[] fetchQuiet(String url) throws IOException {
         return fetchBytes(url, Collections.<String, String>emptyMap(), null, false);
     }
 
-    byte[] fetch(String url, Map<String, String> headers) throws IOException {
+    /**
+     * 取一份 JSON，带请求头。
+     *
+     * @param url 地址
+     * @param headers 请求头
+     * @return 响应体
+     */
+    public byte[] fetch(String url, Map<String, String> headers) throws IOException {
         return fetch(url, headers, null);
     }
 
     /**
      * 取一份远程文件并读入内存，清单类请求会协商 gzip
      *
-     * - `url`: 地址
-     * - `headers`: 附加请求头，可为 null
-     * - `listener`: 下载进度回调，可为 null；约每秒一次
+     * @param url 地址
+     * @param headers 附加请求头，可为 null
+     * @param listener 下载进度回调，可为 null；约每秒一次
      */
-    byte[] fetch(String url, Map<String, String> headers, FetchListener listener) throws IOException {
+    public byte[] fetch(String url, Map<String, String> headers, FetchListener listener) throws IOException {
         if (!quiet) {
             Log.info(Text.of(Msg.FETCHING_JSON_2) + url);
         }
@@ -292,20 +346,11 @@ final class Downloader {
     /**
      * 取一份 JSON
      *
-     * 默认带 `Accept-Encoding: gzip`：8 MB 的清单压到 1 MB 以内，慢速线路上的等待时间
-     * 跟着传输字节数一起降下来。读的过程中每秒打一条字节进度，并每 256 KB 检查一次取消，
-     * 免得看起来像卡死。
-     *
-     * 个别反代会声明 gzip 却给未压缩的内容，此时退回不压缩再取一次。
-     *
-     * - `url`: 地址
-     * - `headers`: 额外请求头，可为 null
-     * - `listener`: 进度回调，可为 null
-     * - `verbose`: 是否打进度与结果日志
-     *
-     * # 返回值
-     *
-     * 解压后的响应体
+     * @param url 地址
+     * @param headers 额外请求头，可为 null
+     * @param listener 进度回调，可为 null
+     * @param verbose 是否打进度与结果日志
+     * @return 解压后的响应体
      */
     private byte[] fetchBytes(String url, Map<String, String> headers, FetchListener listener,
                               boolean verbose) throws IOException {
@@ -328,7 +373,16 @@ final class Downloader {
         return data;
     }
 
-    /** 打开连接并把响应体整段读进来；`gzip` 决定要不要请求压缩传输 */
+    /**
+     * 打开连接并把响应体整段读进来；gzip 决定要不要请求压缩传输
+     *
+     * @param url 地址
+     * @param headers 请求头
+     * @param listener 进度回调（可空）
+     * @param verbose 是否打日志
+     * @param gzip 是否请求压缩
+     * @return 响应体
+     */
     private static byte[] readBody(String url, Map<String, String> headers,
                                    FetchListener listener, boolean verbose, boolean gzip)
             throws IOException {
@@ -352,11 +406,11 @@ final class Downloader {
     /**
      * 读完一个流，顺带打进度、查取消
      *
-     * - `input`: 响应体，已按 Content-Encoding 解压
-     * - `url`: 地址，进进度日志
-     * - `total`: 服务端给的传输字节数；未知时为 0 或负数
-     * - `listener`: 进度回调，可为 null
-     * - `verbose`: 是否每秒打一条进度
+     * @param input 响应体，已按 Content-Encoding 解压
+     * @param url 地址，进进度日志
+     * @param total 服务端给的传输字节数；未知时为 0 或负数
+     * @param listener 进度回调，可为 null
+     * @param verbose 是否每秒打一条进度
      */
     private static byte[] readAll(InputStream input, String url, long total,
                                   FetchListener listener, boolean verbose) throws IOException {
@@ -387,7 +441,7 @@ final class Downloader {
         return out.toByteArray();
     }
 
-    /** 打印一条清单接收进度，约每秒一条 */
+/** 打印一条清单接收进度，约每秒一条 */
     private static void reportFetch(String url, long done, long total, long delta, long elapsed) {
         double elapsedSeconds = elapsed / 1_000_000_000.0;
         double speed = elapsedSeconds <= 0 ? 0 : delta / elapsedSeconds;
@@ -395,6 +449,14 @@ final class Downloader {
         Log.info(Text.of(Msg.FETCHING_JSON_PROGRESS, size, speedText(speed), url));
     }
 
+    /**
+     * 打开连接并检查状态码。
+     *
+     * @param text 地址
+     * @param headers 请求头
+     * @param gzip 是否请求 gzip
+     * @return 连接
+     */
     private static URLConnection open(String text, Map<String, String> headers, boolean gzip)
             throws IOException {
         URL url;
@@ -425,7 +487,12 @@ final class Downloader {
         return connection;
     }
 
-    /** 按 Content-Encoding 套上解压流；服务端没压缩时原样返回 */
+    /**
+     * 按 Content-Encoding 套上解压流；服务端没压缩时原样返回
+     *
+     * @param connection 连接
+     * @return 已按 Content-Encoding 解压的流
+     */
     private static InputStream body(URLConnection connection) throws IOException {
         InputStream input = connection.getInputStream();
         if (isGzip(connection.getContentEncoding())) {
@@ -434,31 +501,60 @@ final class Downloader {
         return input;
     }
 
+    /**
+     * Content-Encoding 是否表示 gzip。
+     *
+     * @param encoding 响应头值
+     * @return 是 gzip 时 true
+     */
     private static boolean isGzip(String encoding) {
         return encoding != null && encoding.toLowerCase(Locale.ROOT).contains("gzip");
     }
 
-    /** 字节数按 KB / MB 显示 */
+    /**
+     * 字节数按 KB / MB 显示
+     *
+     * @param bytes 字节数
+     * @return KB / MB 文本
+     */
     private static String sizeText(long bytes) {
         return bytes < 1048576L
                 ? String.format(Locale.ROOT, "%.0f KB", bytes / 1024.0)
                 : String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
     }
 
-    /** 速度按 KB/s / MB/s 显示 */
+    /**
+     * 速度按 KB/s / MB/s 显示
+     *
+     * @param bytesPerSecond 每秒字节数
+     * @return KB/s 或 MB/s 文本
+     */
     private static String speedText(double bytesPerSecond) {
         return bytesPerSecond < 1048576.0
                 ? String.format(Locale.ROOT, "%.0f KB/s", bytesPerSecond / 1024.0)
                 : String.format(Locale.ROOT, "%.1f MB/s", bytesPerSecond / 1048576.0);
     }
 
-    /** 从计时起点到现在的秒数，保留一位小数 */
+    /**
+     * 从计时起点到现在的秒数，保留一位小数
+     *
+     * @param startedNanos 起始纳秒
+     * @return 保留一位小数的秒数
+     */
     private static String seconds(long startedNanos) {
         return String.format(Locale.ROOT, "%.1f",
                 (System.nanoTime() - startedNanos) / 1_000_000_000.0);
     }
 
-    static boolean matches(Path file, String sha1, String sha256) {
+    /**
+     * 本地文件是否匹配清单哈希。
+     *
+     * @param file 本地文件
+     * @param sha1 期望 SHA1（可空）
+     * @param sha256 期望 SHA256（可空）
+     * @return 匹配时 true
+     */
+    public static boolean matches(Path file, String sha1, String sha256) {
         if (sha1 == null || sha1.trim().isEmpty()) {
             if (sha256 == null || sha256.trim().isEmpty()) {
                 return false;
@@ -470,7 +566,14 @@ final class Downloader {
                 || hash(file, "SHA-256").equalsIgnoreCase(sha256.trim()));
     }
 
-    static String hash(Path file, String algorithm) {
+    /**
+     * 计算文件哈希。
+     *
+     * @param file 文件
+     * @param algorithm 算法名
+     * @return 小写哈希；读失败时空串
+     */
+    public static String hash(Path file, String algorithm) {
         MessageDigest digest = digest(algorithm);
         try (InputStream input = Files.newInputStream(file)) {
             byte[] buffer = new byte[64 * 1024];
@@ -484,6 +587,12 @@ final class Downloader {
         return hex(digest.digest());
     }
 
+    /**
+     * 取摘要实例。
+     *
+     * @param algorithm 算法名
+     * @return 摘要实例
+     */
     private static MessageDigest digest(String algorithm) {
         try {
             return MessageDigest.getInstance(algorithm);
@@ -492,6 +601,12 @@ final class Downloader {
         }
     }
 
+    /**
+     * 字节转小写十六进制。
+     *
+     * @param data 字节
+     * @return 十六进制文本
+     */
     private static String hex(byte[] data) {
         char[] digits = "0123456789abcdef".toCharArray();
         char[] out = new char[data.length * 2];
@@ -502,14 +617,21 @@ final class Downloader {
         return new String(out);
     }
 
+    /**
+     * URL 编码一个路径段。
+     *
+     * @param value 路径段
+     * @return 编码后的文本
+     */
     private static String encodeSegment(String value) {
         try {
-            return java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20");
-        } catch (java.io.UnsupportedEncodingException e) {
+            return URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        } catch (UnsupportedEncodingException e) {
             return value;
         }
     }
-    /** 内容哈希不匹配：重试没有意义 */
+
+/** 内容哈希不匹配：重试没有意义 */
     private static final class VerifyException extends IOException {
         private static final long serialVersionUID = 1L;
 
@@ -518,17 +640,16 @@ final class Downloader {
         }
     }
 
+    /**
+     * 休眠，忽略中断并恢复中断标记。
+     *
+     * @param millis 毫秒
+     */
     private static void sleep(long millis) {
         try {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    private static String describe(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.trim().isEmpty()
-                ? error.getClass().getSimpleName() : message;
     }
 }

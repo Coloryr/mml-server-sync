@@ -1,12 +1,12 @@
-package com.coloryr.mml.serversync;
+package com.coloryr.mml.serversync.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Frame;
 import java.awt.GraphicsEnvironment;
 import java.awt.event.KeyEvent;
+import java.util.Locale;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
@@ -15,16 +15,14 @@ import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 
-/**
- * 更新没跑完时的三选一：重试、跳过本次更新、关闭游戏。
- *
- * 与 {@link CancelPrompt} 的区别：那个是玩家自己点取消，这个是同步真的失败了
- * （多数是清单或文件拉不下来）。关窗或按 Esc 按「跳过更新」处理：玩家的目的是进游戏，
- * 缺的文件下次启动会补齐。
- */
-final class FailurePrompt {
+import com.coloryr.mml.serversync.util.Log;
+import com.coloryr.mml.serversync.util.Msg;
+import com.coloryr.mml.serversync.util.Text;
+
+/** 更新没跑完时的三选一：重试、跳过本次更新、关闭游戏。 */
+public final class FailurePrompt {
     /** 三个出路 */
-    enum Choice {
+    public enum Choice {
         /** 再跑一次同步 */
         RETRY,
         /** 跳过本次更新，继续启动 */
@@ -38,14 +36,11 @@ final class FailurePrompt {
     /**
      * 弹出失败提示框
      *
-     * - `parent`: 父窗口，可为 null
-     * - `reason`: 失败原因，直接显示给玩家
-     *
-     * # 返回值
-     *
-     * 见 {@link Choice}；弹不出来时按跳过更新处理，与无界面模式的行为一致
+     * @param parent 父窗口，可为 null
+     * @param reason 失败原因，直接显示给玩家
+     * @return 见 {@link Choice}；弹不出来时按跳过更新处理，与无界面模式的行为一致
      */
-    static Choice ask(Component parent, String reason) {
+    public static Choice ask(Component parent, String reason) {
         if (GraphicsEnvironment.isHeadless() || ProgressWindow.guiUnavailable()) {
             return Choice.SKIP;
         }
@@ -61,9 +56,16 @@ final class FailurePrompt {
         return result[0];
     }
 
+    /**
+     * 显示失败提示框。
+     *
+     * @param parent 父窗口，可为 null
+     * @param reason 失败原因
+     * @return 玩家选择
+     */
     private static Choice show(Component parent, String reason) {
         UiScale.apply();
-        final JDialog dialog = new JDialog(ownerOf(parent), Text.of(Msg.FAILURE_DIALOG_TITLE), true);
+        final JDialog dialog = new JDialog(UiScale.ownerOf(parent), Text.of(Msg.FAILURE_DIALOG_TITLE), true);
         final Choice[] choice = {Choice.SKIP};
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
@@ -117,14 +119,19 @@ final class FailurePrompt {
         return choice[0];
     }
 
-    /** 异常可能没有消息，别让玩家看到一个空的「本次更新没有完成：」 */
+    /**
+     * 把异常信息换成玩家能看懂的文字。
+     *
+     * @param reason 原始原因
+     * @return 展示文字
+     */
     private static String safe(String reason) {
         if (reason == null || reason.trim().isEmpty()) {
             return Text.of(Msg.SYNC_FAILED);
         }
         String value = reason.trim();
         // 常见的网络异常给一句人话；原始信息已经写在日志里，玩家不需要看懂 getsockopt
-        String lower = value.toLowerCase(java.util.Locale.ROOT);
+        String lower = value.toLowerCase(Locale.ROOT);
         if (lower.contains("connection refused") || lower.contains("connectexception")
                 || lower.contains("connection reset") || lower.contains("network is unreachable")) {
             return Text.of(Msg.FAILURE_REASON_NO_CONNECTION);
@@ -141,16 +148,4 @@ final class FailurePrompt {
         return value;
     }
 
-    private static Frame ownerOf(Component parent) {
-        if (parent instanceof Frame) {
-            return (Frame) parent;
-        }
-        if (parent != null) {
-            java.awt.Window window = SwingUtilities.getWindowAncestor(parent);
-            if (window instanceof Frame) {
-                return (Frame) window;
-            }
-        }
-        return null;
-    }
 }

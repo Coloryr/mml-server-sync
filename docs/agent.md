@@ -49,7 +49,8 @@ javaagent 提供，而它排在同步 agent 之后，premain 里初始化 Swing 
 | `mml.serverSync.noAsk` | `MML_SERVER_SYNC_NO_ASK` | 关闭自选模组弹窗（默认允许弹窗） |
 | `mml.serverSync.skip` | `MML_SERVER_SYNC_SKIP` | 逗号分隔的清单路径，按「未勾选」处理 |
 | `mml.serverSync.update` | `MML_SERVER_SYNC_NO_UPDATE` | 自更新开关 |
-| `mml.serverSync.updateIndex` | `MML_SERVER_SYNC_INDEX` | 自更新索引地址 |
+| `mml.serverSync.updateUrl` | `MML_SERVER_SYNC_UPDATE_URL` | 自更新地址：`index.json` 或它所在的目录（自动补 `index.json`） |
+| `mml.serverSync.updateIndex` | `MML_SERVER_SYNC_INDEX` | 上一行的旧写法 |
 | `mml.serverSync.lang` | `MML_SERVER_SYNC_LANG` | 界面语言：`zh` / `en` |
 | — | `MML_SKIP` | 跳过 MML 启动器识别（强制走同步，用于在 MML 下测试） |
 | — | `CURSEFORGE_API_KEY` | CurseForge API Key |
